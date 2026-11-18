@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.service.notification.Condition
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.agentos.agent.ToolOutcome
 import com.agentos.core.CoreClient
 import com.agentos.core.api.CoreContract
@@ -135,6 +136,8 @@ object Modes {
 
     // ---------- changing ----------
 
+    // Only reached through run(), which returns early below Android 15.
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private suspend fun create(ctx: Context, input: JSONObject): ToolOutcome {
         val name = input.optString("name").trim().ifEmpty { throw IllegalArgumentException("A new mode needs a name, e.g. \"Deep work\".") }
         val nm = nm(ctx)
@@ -171,6 +174,8 @@ object Modes {
         return ToolOutcome(msg.toString())
     }
 
+    // Only reached through run(), which returns early below Android 15.
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private suspend fun update(ctx: Context, input: JSONObject): ToolOutcome {
         val m = find(all(ctx), input.optString("mode"))
         val id = m.getString("id")
@@ -197,6 +202,8 @@ object Modes {
             "\n(If the user edited this mode in Settings, Android keeps their edits over Ubiq's.)")
     }
 
+    // Only reached through run(), which returns early below Android 15.
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private suspend fun switch(ctx: Context, input: JSONObject, on: Boolean): ToolOutcome {
         val m = find(all(ctx), input.optString("mode"))
         val id = m.getString("id")
@@ -273,6 +280,8 @@ object Modes {
     class EndReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val ctx = context.applicationContext
+            // End times are only set on Android 15+, where modes work at all.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
             if (intent.action == Intent.ACTION_BOOT_COMPLETED) { rearm(ctx); return }
             val id = intent.getStringExtra(EXTRA_ID) ?: return
             val pending = goAsync()
