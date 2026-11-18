@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Camera captures (mini apps' <input capture> and the chat camera button). -->
+    <cache-path name="captures" path="captures/" />
+</paths>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug builds only: lets `adb shell am broadcast` drive a single tool for testing. -->
+        <receiver android:name=".debug.ToolDebugReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.agentos.DEBUG_TOOL" />
+                <action android:name="com.agentos.DEBUG_SAY" />
+                <action android:name="com.agentos.DEBUG_ASK" />
+                <action android:name="com.agentos.DEBUG_DUMP" />
+                <action android:name="com.agentos.DEBUG_A11Y_BUTTON" />
+                <action android:name="com.agentos.DEBUG_LOCAL" />
+                <action android:name="com.agentos.DEBUG_ATTACH" />
+                <action android:name="com.agentos.DEBUG_PREF" />
+                <action android:name="com.agentos.DEBUG_MINIAPP" />
+                <action android:name="com.agentos.DEBUG_SPEAK" />
+                <action android:name="com.agentos.DEBUG_STOP" />
+                <action android:name="com.agentos.DEBUG_LIVE" />
+                <action android:name="com.agentos.DEBUG_SCREEN" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

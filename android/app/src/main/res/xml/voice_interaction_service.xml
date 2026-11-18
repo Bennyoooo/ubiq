@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Makes Ubiq a full digital assistant: the corner swipe / power-button hold opens AssistSession
+     over the current app, with that app's screen content and screenshot. -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.agentos.assist.AgentSessionService"
+    android:recognitionService="com.agentos.assist.AgentRecognitionService"
+    android:settingsActivity="com.agentos.ui.SettingsActivity"
+    android:supportsAssist="true"
+    android:supportsLocalInteraction="true" />

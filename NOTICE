@@ -1,0 +1,40 @@
+Ubiq
+Copyright 2026 Benny Jiang and the Ubiq contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The Kotlin sources use the package name com.agentos, the project's original name.
+
+Third-party components
+======================
+
+Bundled in the APK by scripts/build-node-runtime.sh (Termux aarch64 builds,
+https://github.com/termux/termux-packages):
+  Node.js 24 ............ MIT (includes V8, libuv, llhttp, undici and others under
+                          their own licences; see https://github.com/nodejs/node/blob/main/LICENSE)
+  OpenSSL 3 ............. Apache-2.0
+  ICU ................... Unicode-3.0
+  SQLite ................ public domain
+  c-ares ................ MIT
+  zlib .................. Zlib
+  LLVM libc++ ........... Apache-2.0 WITH LLVM-exception
+  CA certificates ....... MPL-2.0 (Mozilla's root store)
+
+The Pi harness (harness/, packed into the APK) and its npm dependencies,
+listed with exact versions in harness/package-lock.json:
+  @earendil-works/pi-ai, @earendil-works/pi-coding-agent ... MIT
+  other dependencies ... MIT, Apache-2.0, BSD-2/3-Clause, ISC, 0BSD,
+                         BlueOak-1.0.0, Unlicense
+
+Android libraries (fetched by Gradle, see android/app/build.gradle.kts):
+  AndroidX, Jetpack Compose, Material components ... Apache-2.0
+  Kotlin coroutines ..... Apache-2.0
+  OkHttp ................ Apache-2.0
+  ZXing ................. Apache-2.0
+  Shizuku API ........... Apache-2.0 (https://github.com/RikkaApps/Shizuku-API)
+  Google Play services auth ... Android Software Development Kit License
+                          (proprietary, used only for Google sign-in)
+
+Fonts in android/app/src/main/res/font, under the SIL Open Font License 1.1
+(texts in android/app/src/main/assets/licenses/):
+  Fredoka, Nunito, Inter, Space Grotesk

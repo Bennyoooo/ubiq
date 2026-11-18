@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Ubiq settings, Look: the system light/dark switch. Privileged: granted on the ROM (privapp allowlist). -->
+
+    <uses-permission android:name="android.permission.MODIFY_DAY_NIGHT_MODE" tools:ignore="ProtectedPermissions" />
+    <!-- Personal context (memory/Places): the places the owner stays; asked for in Settings. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Live mode (voice/LiveCall): a call that goes on with the screen off, routed to the earpiece, speaker or a headset. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- The chat's camera button; asked for on first use. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Keeps the phone (and with it the workspace display) awake while a background task runs. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Bring a workspace's floor back to the front on its own display. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <!-- Connectors: the phone's calendars and contacts; payment approval by fingerprint. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <!-- Call screening (phone/): who is a contact or a number the owner called, full-screen "take the call?",
+         and a phone-call foreground service while Ubiq is on the call. -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Jobs: an exact alarm for the next scheduled run, set again after a reboot. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- set_alarm / set_timer: the Clock app's public intents -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Talk to Ubiq Core (com.agentos.core), the privileged broker on the ROM. -->
+    <uses-permission android:name="com.agentos.core.permission.CONTROL" />
+    <!-- Running tasks: an ongoing notification per session, promoted to a status chip on Android 16. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+
+    <queries>
+        <package android:name="com.agentos.core" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".AgentOsApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AgentOS"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <activity
+            android:name=".pay.PaymentApproval$ApprovalActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.AgentOS.Assist" />
+        <!-- The app: the conversation, chats, Space. Also what the assistant gesture opens when the sheet cannot. -->
+        <activity
+            android:name=".ui.HomeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.AgentOS">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- Live mode: a phone call with Ubiq (voice/LiveCall). -->
+        <activity
+            android:name=".voice.LiveCallActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.agentos.live"
+            android:excludeFromRecents="false"
+            android:theme="@style/Theme.AgentOS" />
+        <service
+            android:name=".voice.LiveCallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+        <receiver android:name=".voice.LiveCallService$HangUpReceiver" android:exported="false" />
+
+        <!-- Call screening: Ubiq answers callers who aren't in the contacts (phone/CallScreening). -->
+        <service
+            android:name=".phone.UbiqScreeningService"
+            android:exported="true"
+            android:permission="android.permission.BIND_SCREENING_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".phone.ScreenCallService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
+        <activity
+            android:name=".phone.CallScreenActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.agentos.screen"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.AgentOS" />
+        <receiver android:name=".phone.ScreenNotices$Receiver" android:exported="false" />
+
+        <!-- Jobs: the alarm for scheduled runs; boot and clock changes re-arm it. -->
+        <receiver android:name=".jobs.JobAlarmReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.agentos.JOB_ALARM" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- The Stop button on a running task's notification (agent/TaskNotifications). -->
+        <receiver android:name=".agent.TaskNotifications$StopReceiver" android:exported="false" />
+        <receiver android:name=".agent.AnswerReceiver" android:exported="false" />
+        <!-- phone_modes: ends a mode at its "until" time; boot re-arms the end times. -->
+        <receiver android:name=".notify.Modes$EndReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.agentos.MODE_END" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <activity android:name=".ui.PassActivity" android:exported="false" android:showWhenLocked="true"
+            android:excludeFromRecents="true" android:launchMode="singleTask" android:taskAffinity="com.agentos.pass"
+            android:theme="@style/Theme.AgentOS" />
+
+        <!-- Notification access: read_notifications and trigger jobs. -->
+        <service
+            android:name=".notify.NotificationWatcher"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Digital assistant: the corner swipe / power-button hold opens a sheet over the current app. -->
+        <service
+            android:name=".assist.AgentVoiceService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction_service" />
+        </service>
+        <service
+            android:name=".assist.AgentSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <!-- Required by the assistant role; forwards to the phone's existing speech recognizer. -->
+        <service
+            android:name=".assist.AgentRecognitionService"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data android:name="android.speech" android:resource="@xml/recognition_service" />
+        </service>
+
+        <!-- The owner's rules on a stock phone (on the ROM, Ubiq Core's own screens replace these). -->
+        <activity
+            android:name=".rules.RulesActivity"
+            android:exported="false"
+            android:label="Agent rules"
+            android:excludeFromRecents="true" />
+        <activity
+            android:name=".rules.OwnerApprovalActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.AgentOS.Assist" />
+        <receiver android:name=".rules.InAppPolicy$ResumeReceiver" android:exported="false" />
+
+        <!-- Holding the nav handle (Contextual Search, launched by system_server, hence not exported). -->
+        <activity
+            android:name=".assist.ContextualSearchActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.app.contextualsearch.action.LAUNCH_CONTEXTUAL_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings" />
+
+        <!-- Sits at the bottom of the hidden workspace display. Started once by the Shizuku (shell) helper,
+             which is why it is exported but guarded by a permission only shell/system hold. -->
+        <activity
+            android:name=".workspace.WorkspaceHomeActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:launchMode="standard"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.AgentOS" />
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- The hands of the agent: reads the screen and performs actions in any app. -->
+        <service
+            android:name=".control.ControlService"
+            android:exported="false"
+            android:label="@string/a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+    </application>
+</manifest>

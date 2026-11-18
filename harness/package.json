@@ -1,0 +1,16 @@
+{
+  "name": "agentos-harness",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The Pi harness for Ubiq: runs the agent loop and calls the phone's tools through its MCP tool host (docs/AGENT_DESIGN.md).",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  }
+}
