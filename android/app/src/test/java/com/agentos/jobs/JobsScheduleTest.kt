@@ -7,14 +7,16 @@ import java.util.Locale
 import java.util.TimeZone
 
 class JobsScheduleTest {
+    // Before the formatter below: it takes the default time zone when it is created, and on a UTC
+    // machine (CI) the first test then printed UTC times.
+    init { TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles")) }
+
     private val f = SimpleDateFormat("yyyy-MM-dd HH:mm EEE", Locale.US)
     private fun t(s: String) = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).parse(s)!!.time
     private fun next(j: Jobs.Job, after: String) = Jobs.next(j, t(after)).let { if (it == 0L) "none" else f.format(it) }
     private fun rec(repeat: String, time: String = "08:00", at: String = "2026-10-19 00:00", interval: Int = 1, days: String = "", until: String? = null, max: Int = 0, runs: Int = 0) =
         Jobs.Job(1, Jobs.Kind.RECURRING, "x", "y", repeat = repeat, time = time, at = t(at), interval = interval, days = days,
             until = until?.let { t(it) } ?: 0, maxRuns = max, runs = runs)
-
-    init { TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles")) }
 
     @Test fun daily() {
         assertEquals("2026-10-19 08:00 Mon", next(rec("daily"), "2026-10-19 07:00"))
