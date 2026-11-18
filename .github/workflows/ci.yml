@@ -18,7 +18,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # The Ubuntu runner already has the Android SDK (ANDROID_HOME); setup-android@v3 fails on its
+      # newer command-line tools, and Gradle fetches any missing platform itself.
       # -PnoPi=true skips packing Node and the Pi harness into the APK (scripts/build-node-runtime.sh).
       - name: Unit tests
         run: ./gradlew -PnoPi=true :policy:test :app:testDebugUnitTest
