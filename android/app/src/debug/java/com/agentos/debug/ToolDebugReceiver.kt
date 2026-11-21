@@ -44,6 +44,29 @@ class ToolDebugReceiver : BroadcastReceiver() {
             Log.i("AgentOS/Debug", "screen: ${l?.let { "${it.who} | ${it.reason} | asking=${it.askingOwner} | ${it.phase} | " + it.lines.joinToString(" | ") { x -> x.who.name + ": " + x.text } } ?: "no call; last: " + p.transcriptForDebug.replace('\n', '|')}")
             return
         }
+        if (intent.action == "com.agentos.DEBUG_WAKE") {
+            // adb shell "am broadcast -a com.agentos.DEBUG_WAKE --es op on|off|fire|state|scan [--es path files/x.wav] [--ei sensitivity 0-2] [--ez screen_off false] com.agentos"
+            //   -> files/debug_wake.txt. fire = act as if "Hey Ubiq" was heard; scan = run a 16 kHz WAV through the spotter.
+            val p = goAsync()
+            val app = context.applicationContext
+            com.agentos.agent.AgentRuntime.scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val out = try {
+                    if (intent.hasExtra("sensitivity")) com.agentos.data.Prefs.setWakeSensitivity(app, intent.getIntExtra("sensitivity", 1))
+                    if (intent.hasExtra("screen_off")) com.agentos.data.Prefs.setWakeScreenOff(app, intent.getBooleanExtra("screen_off", true))
+                    when (intent.getStringExtra("op") ?: "state") {
+                        "on" -> { com.agentos.data.Prefs.setWakeWord(app, true); com.agentos.voice.WakeWord.sync(app); "on" }
+                        "off" -> { com.agentos.data.Prefs.setWakeWord(app, false); com.agentos.voice.WakeWord.sync(app); "off" }
+                        "fire" -> { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            com.agentos.voice.WakeWordService.openAssistant(app, app.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked) }; "fired" }
+                        "scan" -> "hits=" + com.agentos.voice.WakeWord.scanWav(app, java.io.File(app.filesDir, intent.getStringExtra("path") ?: "wake.wav").path)
+                        else -> ""
+                    } + " state=" + com.agentos.voice.WakeWord.state.value + " service=" + com.agentos.voice.WakeWordService.alive
+                } catch (t: Throwable) { "error: $t" }
+                java.io.File(app.filesDir, "debug_wake.txt").writeText(out)
+                p.finish()
+            }
+            return
+        }
         if (intent.action == "com.agentos.DEBUG_LIVE") {
             // adb shell "am broadcast -a com.agentos.DEBUG_LIVE --es op start|say|end [--es text 'words'] com.agentos"
             // say: the words reach the live call as if spoken (no mic needed).

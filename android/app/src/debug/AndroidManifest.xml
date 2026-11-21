@@ -17,6 +17,7 @@
                 <action android:name="com.agentos.DEBUG_STOP" />
                 <action android:name="com.agentos.DEBUG_LIVE" />
                 <action android:name="com.agentos.DEBUG_SCREEN" />
+                <action android:name="com.agentos.DEBUG_WAKE" />
             </intent-filter>
         </receiver>
     </application>

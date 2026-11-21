@@ -55,6 +55,18 @@ object PiRuntime {
         }
     }
 
+    /**
+     * Starts local Node ahead of a turn (the mic opened, a message is being routed), so its cold start overlaps
+     * with the user speaking. It idles out as usual if no turn comes.
+     */
+    fun prewarm(ctx: Context) {
+        if (!enabled(ctx) || !local(ctx) || running) return
+        AgentRuntime.scope.launch {
+            val t0 = android.os.SystemClock.uptimeMillis()
+            try { use(ctx) { } ; Trace.time(null, "pi prewarm", android.os.SystemClock.uptimeMillis() - t0) } catch (t: Throwable) { Log.w(TAG, "prewarm", t) }
+        }
+    }
+
     private suspend fun ensure(ctx: Context) = lock.withLock {
         idle?.cancel()
         if (running && Harness.healthy(ctx)) return@withLock

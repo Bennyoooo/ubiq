@@ -37,7 +37,7 @@ object ToolHost {
 
     /** Read-only tools, marked for the harness (MCP readOnlyHint); everything else may change something. */
     private val READ_ONLY = setOf("get_screen", "screenshot", "read_list", "wait", "read_notifications", "summarize_notifications", "unreplied_messages",
-        "calendar_events", "contacts_search", "space_search", "list_jobs", "job_result", "task_status", "recall")
+        "calendar_events", "contacts_search", "space_search", "list_jobs", "job_result", "task_status", "recall", "weather")
     /** Ending a turn is the harness's own business (its final reply), checked by [CompletionCheck] in [Session]. */
     private val HIDDEN = setOf("done")
 
@@ -144,16 +144,13 @@ object ToolHost {
         val n = b.calls.incrementAndGet()
         kotlinx.coroutines.withTimeoutOrNull(1500) { while (session.harnessToolEvents.get() < n) kotlinx.coroutines.delay(15) }
         session.beforeHarnessTool(name, args)?.let { return toolResult(it, isError = true) }
-        if (name == "ask_user") {
-            val answer = session.askFromHarness(args.optString("question", "Could you clarify?"), askOptions(args))
-            return toolResult("The user answered: $answer")
-        }
+        if (name == "ask_user") return answerResult(b, session.askFromHarness(args.optString("question", "Could you clarify?"), askOptions(args)))
         val outcome = try {
             AgentTools.execute(app, name, args, AgentRuntime.apps, b.target)
         } catch (d: TaskDone) {
             ToolOutcome(d.summary)
         } catch (q: NeedUser) {
-            ToolOutcome("The user answered: " + session.askFromHarness(q.question, q.options))
+            return answerResult(b, session.askFromHarness(q.question, q.options))
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -168,6 +165,14 @@ object ToolHost {
         if (outcome.imagePng != null && !hasSecret && AgentTools.screenshotsEnabled(app))
             content.put(JSONObject().put("type", "image").put("mimeType", "image/png").put("data", Base64.encodeToString(outcome.imagePng, Base64.NO_WRAP)))
         return JSONObject().put("content", content).put("isError", outcome.isError)
+    }
+
+    /** The user's answer, with any photos or files they sent along (a photo of the card the form asks for). */
+    private fun answerResult(b: Binding, answer: String): JSONObject {
+        val (note, images) = Attachment.forHarness(b.session.takeAnswerFiles())
+        val content = JSONArray().put(JSONObject().put("type", "text").put("text", b.session.afterHarnessTool("The user answered: $answer$note")))
+        for (a in images) content.put(JSONObject().put("type", "image").put("mimeType", a.mime).put("data", Base64.encodeToString(a.bytes, Base64.NO_WRAP)))
+        return JSONObject().put("content", content).put("isError", false)
     }
 
     private fun toolResult(text: String, isError: Boolean = false) = JSONObject()

@@ -59,6 +59,10 @@ android {
     // Native libraries are extracted at install (legacy packaging) because Node is exec'd from nativeLibraryDir.
     sourceSets["main"].jniLibs.srcDir("node-runtime/jniLibs")
     sourceSets["main"].assets.srcDir("node-runtime/assets")
+    // The "Hey Ubiq" wake word engine (scripts/fetch-wakeword.sh): sherpa-onnx's JNI library and its keyword model.
+    sourceSets["main"].jniLibs.srcDir("wakeword/jniLibs")
+    sourceSets["main"].assets.srcDir("wakeword/assets")
+    androidResources { noCompress += "onnx" }
 
     packaging {
         jniLibs { useLegacyPackaging = true }
@@ -86,7 +90,14 @@ val nodeRuntime by tasks.registering(Exec::class) {
     environment("PATH", "/opt/homebrew/bin:/usr/local/bin:" + System.getenv("PATH"))
     onlyIf { (project.findProperty("noPi") as String?)?.toBoolean() != true }
 }
-tasks.named("preBuild") { dependsOn(nodeRuntime) }
+// Downloads the wake word engine once (checksummed; skipped when android/app/wakeword/ is current).
+val wakeWord by tasks.registering(Exec::class) {
+    val root = projectDir.parentFile.parentFile
+    inputs.file(File(root, "scripts/fetch-wakeword.sh"))
+    outputs.dir("wakeword")
+    commandLine(File(root, "scripts/fetch-wakeword.sh").path)
+}
+tasks.named("preBuild") { dependsOn(nodeRuntime, wakeWord) }
 
 dependencies {
     // AIDL contract with Ubiq Core (com.agentos.core), the privileged broker on the ROM.

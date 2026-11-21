@@ -88,9 +88,9 @@ object AgentRuntime {
     val main: Session get() = session(MAIN_ID) ?: _focused.value
 
     /** An entry point (home bar, assistant sheet, share, ...): the main conversation, shown if the app opens. */
-    fun toMain(text: String, attachments: List<Attachment> = emptyList(), modelText: String? = null, onScreen: Boolean = false, fromAssist: Boolean = false) {
+    fun toMain(text: String, attachments: List<Attachment> = emptyList(), modelText: String? = null, onScreen: Boolean = false, fromAssist: Boolean = false, byVoice: Boolean = false) {
         focusMain()
-        main.send(text, attachments, modelText, onScreen, fromAssist)
+        main.send(text, attachments, modelText, onScreen, fromAssist, byVoice)
     }
 
     fun focusMain() { _focused.value = main }
@@ -98,8 +98,8 @@ object AgentRuntime {
     // ---------- the focused session (what the chat screen shows) ----------
 
     val isBusy: Boolean get() = _focused.value.isBusy
-    fun send(text: String, attachments: List<Attachment> = emptyList(), modelText: String? = null, onScreen: Boolean = false, fromAssist: Boolean = false) =
-        _focused.value.send(text, attachments, modelText, onScreen, fromAssist)
+    fun send(text: String, attachments: List<Attachment> = emptyList(), modelText: String? = null, onScreen: Boolean = false, fromAssist: Boolean = false, byVoice: Boolean = false) =
+        _focused.value.send(text, attachments, modelText, onScreen, fromAssist, byVoice)
     fun cancel() = _focused.value.cancel()
     fun systemNote(text: String) = _focused.value.systemNote(text)
     fun setUserControl(on: Boolean) = _focused.value.setUserControl(on)

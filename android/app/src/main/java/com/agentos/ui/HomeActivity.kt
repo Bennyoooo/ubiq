@@ -193,6 +193,7 @@ class HomeActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume(); isInForeground = true
         shell?.onResume(this)
+        com.agentos.voice.WakeWord.sync(this)  // a microphone service may only start while Ubiq is in front
         com.agentos.control.Island.setHome(screen.value == Screen.HOME)
         if (screen.value == Screen.CHAT) com.agentos.control.Island.seen(AgentRuntime.focused.value.id)
     }
@@ -579,12 +580,12 @@ private fun AssistantTab(startVoice: androidx.compose.runtime.MutableState<Boole
     val listState = rememberLazyListState()
 
     var replyTo by remember { mutableStateOf<ChatItem?>(null) }
-    fun send(text: String) {
+    fun send(text: String, byVoice: Boolean = false) {
         if (text.isBlank() && pending.isEmpty()) return
         Speaker.stop()
         // A swiped reply tells the model which message it answers; the chat shows only the user's words.
         val quoted = replyTo?.let { "(Replying to your message: \"${com.agentos.agent.plainText(it.text).take(300)}\")\n$text" }
-        AgentRuntime.send(text, pending, modelText = quoted)
+        AgentRuntime.send(text, pending, modelText = quoted, byVoice = byVoice)
         input = ""; pending = emptyList(); replyTo = null
     }
 
@@ -622,11 +623,12 @@ private fun AssistantTab(startVoice: androidx.compose.runtime.MutableState<Boole
         val vi = VoiceInput(ctx)
         if (!vi.available) { AgentRuntime.systemNote("Voice recognition is not available on this device."); return }
         Speaker.stop()
+        com.agentos.agent.PiRuntime.prewarm(ctx)
         listening = true; partial = ""; voice = vi
         voiceJob = scope.launch {
             val result = try { vi.dictate(onText = { partial = it }) } finally { listening = false; voice = null }
             partial = ""
-            if (!result.isNullOrBlank()) send(result)
+            if (!result.isNullOrBlank()) send(result, byVoice = true)
         }
     }
     fun stopListening() { voice?.stop() }
@@ -638,6 +640,12 @@ private fun AssistantTab(startVoice: androidx.compose.runtime.MutableState<Boole
     }
 
     LaunchedEffect(startVoice.value) { if (startVoice.value) { startVoice.value = false; micTap() } }
+    // Leaving Ubiq ends dictation (and sends what was said): the mic should not stay open behind another app.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) voice?.stop() }
+        lifecycle.addObserver(o); onDispose { lifecycle.removeObserver(o) }
+    }
     // A search this chat was opened from; it ends when another chat is shown.
     val find = ChatFind.current.value?.takeIf { it.sessionId == session.id }?.query
     LaunchedEffect(session.id) { if (ChatFind.current.value?.sessionId != session.id) ChatFind.current.value = null }
@@ -671,7 +679,8 @@ private fun AssistantTab(startVoice: androidx.compose.runtime.MutableState<Boole
             Spacer(Modifier.width(8.dp))
             GlyphButton(Glyph.Notes, "Notes, memory, jobs and settings", onSpace, size = 19.dp, target = 34.dp)
         }
-        val shown = items.filter { it.role != Role.ACTION }
+        // Background task cards are not drawn: the tray above shows a task while it runs, and its result or question comes as a message.
+        val shown = items.filter { it.role != Role.ACTION && it.role != Role.TASK }
         // The matching messages, oldest first; the chat opens on the newest and the arrows step through them.
         val matches = if (find == null) emptyList() else shown.indices.filter { findable(shown[it], find) }
         var at by remember(session.id, find) { mutableIntStateOf(-1) }
@@ -792,7 +801,7 @@ private fun FindBar(query: String, at: Int, count: Int, onUp: () -> Unit, onDown
 }
 
 @Composable
-private fun AttachList(onCamera: () -> Unit, onPhotos: () -> Unit, onFile: () -> Unit) {
+internal fun AttachList(onCamera: () -> Unit, onPhotos: () -> Unit, onFile: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     Column(Modifier.width(184.dp).shadow(12.dp, shape, ambientColor = Color.Black.copy(alpha = 0.18f), spotColor = Color.Black.copy(alpha = 0.18f))
         .clip(shape).background(MaterialTheme.colorScheme.surface).border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape).padding(vertical = 4.dp)) {
@@ -813,7 +822,7 @@ private fun AttachOption(label: String, icon: androidx.compose.ui.graphics.vecto
 
 /** A photo waiting to be sent: just the picture, with a small x on its corner. Other files keep their name. */
 @Composable
-private fun PendingAttachment(a: Attachment, onRemove: () -> Unit) {
+internal fun PendingAttachment(a: Attachment, onRemove: () -> Unit) {
     val t = a.thumbnail ?: return AttachmentChip(a, onRemove)
     Box(Modifier.size(64.dp)) {
         Image(t.asImageBitmap(), "Photo to send", Modifier.padding(top = 6.dp, end = 6.dp).fillMaxSize().clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
@@ -875,7 +884,7 @@ private fun Bubble(item: ChatItem, live: Boolean = false, onOption: (String) -> 
     when (item.role) {
         // Individual steps are not shown; the working indicator (and Watch) cover them.
         Role.ACTION -> {}
-        Role.TASK -> TaskCard(item, onDelete)
+        Role.TASK -> {}
         // A note like "Call with Ubiq · 0:59": long press deletes it, like a message.
         Role.SYSTEM -> Box {
             var menu by remember { mutableStateOf(false) }
@@ -1022,55 +1031,6 @@ private fun TaskRow(title: String?, note: String, running: Boolean, onWatch: (()
             .clickable(onClick = onWatch).padding(5.dp), tint = dim)
         if (onStop != null) Text("stop", Modifier.padding(start = 4.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onStop)
             .padding(horizontal = 6.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = Ubiq.Red)
-    }
-}
-
-/**
- * A background task this conversation started (start_task): its live state, and its result or question.
- * Tapping it opens the task's own chat (to watch, answer or stop it).
- */
-@Composable
-@OptIn(ExperimentalFoundationApi::class)
-private fun TaskCard(item: ChatItem, onDelete: ((ChatItem) -> Unit)? = null) {
-    val task = remember(item.taskId) { item.taskId?.let { AgentRuntime.session(it) } }
-    val status by (task?.status ?: remember { kotlinx.coroutines.flow.MutableStateFlow<AgentStatus>(AgentStatus.Idle) }).collectAsStateWithLifecycle()
-    val items by (task?.items ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<ChatItem>()) }).collectAsStateWithLifecycle()
-    val result = items.lastOrNull { it.role == Role.ASSISTANT }?.text
-    val (line, accent) = when (val st = status) {
-        is AgentStatus.Running -> (if (st.note.isBlank() || st.note == com.agentos.agent.Session.WORKING) "Working on it…" else st.note) to Brand.Butter
-        is AgentStatus.WaitingForUser -> "Needs your answer: ${st.question}" to Brand.Tangerine
-        AgentStatus.Idle -> (when {
-            task == null -> "No longer available"
-            items.lastOrNull()?.text == "Stopped." -> "Stopped"
-            result != null -> com.agentos.agent.plainText(result)
-            else -> "Done"
-        }) to Brand.Mint
-    }
-    // Flat, like a linked page in a doc: a hairline outline, no moulded edge or shadow (user feedback 2026-11-08).
-    val open = task?.let { t -> { AgentRuntime.focus(t.id) } }
-    var menu by remember { mutableStateOf(false) }
-    // Long press deletes the card; a finished task's own chat goes with it (a running one keeps going, only its card goes).
-    DeleteMenu(menu, { menu = false }) {
-        onDelete?.invoke(item)
-        if (task != null && !task.isActive) AgentRuntime.delete(task.id)
-    }
-    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-        .combinedClickable(onClick = { open?.invoke() }, onLongClick = { if (onDelete != null) menu = true })
-        .padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Led(accent, size = 8.dp, glow = status !is AgentStatus.Idle)
-                    Spacer(Modifier.width(8.dp))
-                    Text("background task", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(item.text, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(line, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (task != null) Text("open ›", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
     }
 }
 

@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
 /**
  * Screen capture for the timeline (docs/MEMORY.md): once the main screen settles, the text of the app in front, and
  * only the lines that are new for that app (a scrolled list adds its new rows; the same screen again only extends
- * the last event). Never password fields, text being typed, codes ([Lifelog.clean]), or [Lifelog.EXCLUDED] apps.
+ * the last event). Never password fields, text being typed, codes ([Lifelog.clean]), or apps kept out ([Lifelog.excluded]).
  * The agent's own desks are not the owner's life and are not captured.
  */
 object Capture {
@@ -65,11 +65,11 @@ object Capture {
     @Synchronized fun reset() { seen.clear(); lastPkg = ""; lastId = null }
 
     @Synchronized private fun capture(svc: ControlService) {
-        if (!Lifelog.enabled(svc)) return
+        if (!Lifelog.enabled(svc, Lifelog.Kind.SCREEN)) return
         if (svc.getSystemService(PowerManager::class.java)?.isInteractive != true) return
         val root = svc.rootInActiveWindow ?: return
         val pkg = root.packageName?.toString().orEmpty()
-        if (pkg.isEmpty() || pkg in Lifelog.EXCLUDED) return
+        if (pkg.isEmpty() || Lifelog.excluded(svc, pkg)) return
         val lines = LinkedHashSet<String>()
         walk(root, lines)
         if (lines.isEmpty()) return

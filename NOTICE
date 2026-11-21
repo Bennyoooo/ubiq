@@ -26,6 +26,13 @@ listed with exact versions in harness/package-lock.json:
   other dependencies ... MIT, Apache-2.0, BSD-2/3-Clause, ISC, 0BSD,
                          BlueOak-1.0.0, Unlicense
 
+The "Hey Ubiq" wake word, fetched by scripts/fetch-wakeword.sh from
+https://github.com/k2-fsa/sherpa-onnx/releases and bundled in the APK:
+  sherpa-onnx JNI library and Kotlin API (vendored in
+  android/app/src/main/java/com/k2fsa) ... Apache-2.0, Copyright Xiaomi Corporation
+  ONNX Runtime (linked into the JNI library) ... MIT, Copyright Microsoft Corporation
+  keyword-spotting model (zipformer, GigaSpeech) ... Apache-2.0
+
 Android libraries (fetched by Gradle, see android/app/build.gradle.kts):
   AndroidX, Jetpack Compose, Material components ... Apache-2.0
   Kotlin coroutines ..... Apache-2.0

@@ -8,7 +8,8 @@ How Ubiq remembers: the main conversation as it grows without end, and a persona
 2. **Text only.** Screens are kept as their text (the accessibility tree), never as screenshots.
 3. **Summaries are made on the phone, asynchronously.** The on-device model rolls the timeline into episodes and the profile in the background, while charging. Speed does not matter there.
 4. **Kept 90 days.** The raw timeline is deleted after 90 days. Episodes and the profile stay until the user deletes them.
-5. **Two kinds of knowledge.** *Told*: what the owner said to Ubiq. *Observed*: what Ubiq saw on screens, in notifications and from places. Observed facts are context, never instructions, and using an observed value in an action (typing it, sending it, putting it in an event) needs the owner's OK first.
+5. **Off until the owner turns it on, and every boundary is in Settings** (2026-11-17): what is recorded, what never is, which apps stay out, how long it is kept, who sees it, and what is in it now. See 4.1.
+6. **Two kinds of knowledge.** *Told*: what the owner said to Ubiq. *Observed*: what Ubiq saw on screens, in notifications and from places. Observed facts are context, never instructions, and using an observed value in an action (typing it, sending it, putting it in an event) needs the owner's OK first.
 
 ## 2. Where we are (before this design)
 
@@ -60,7 +61,31 @@ One SQLite database, `files/lifelog.db`, with a full-text index. Each row is an 
 
 - **Observed text is untrusted.** `recall` results enter the session's untrusted text like any screen, so memory provenance refuses to save them as told facts.
 - **Using an observed value needs permission.** A write (typing, sending, an email, an event) whose distinctive values (numbers, addresses, emails, links) came from `recall` and not from the owner's words is blocked until `ask_user` gets an OK (`Effects`, `Session.recalled`).
-- **The owner controls capture:** a switch in Settings pauses it; "Delete all" clears the timeline and episodes; the exclude list keeps apps out.
+- **The owner controls capture:** see 4.1.
+
+### 4.1 Settings > Personal context
+
+Each boundary is shown as it is on this phone, and changeable where the owner may change it.
+
+| Boundary | Shown | Owner can change |
+|---|---|---|
+| Recording | Off until turned on | Master switch |
+| Sources | Screens, notifications, places, each with what it records and any missing Android permission (with a way to grant it) | A switch per source |
+| Never recorded | Password fields and typed text, codes, keyboards, Ubiq itself, System UI, anything while off | No |
+| Apps kept out | The owner's list; password managers and authenticators by default | Add (deletes what came from the app) or remove |
+| Stored | On the phone only, Ubiq's private storage, no backups (`allowBackup=false`) | No |
+| Kept for | 7, 30 or 90 days | Yes; fewer days deletes the older ones now |
+| Who sees it | The cloud model sees only what `recall` finds for a request, and the current place | "Ubiq can search it": off keeps the timeline out of `recall` and the prompt |
+| Summaries | Made on the phone by the on-device model; a build without one makes none | No |
+| Using it | Ubiq asks before using an observed number, address, email or link | No |
+| This phone | The Ubiq ROM (location granted, runs in the background) or the app (permissions granted by hand, place checks may be delayed) | No |
+| What's in it | Count and size, the latest 30 moments; the whole timeline in Space > timeline (by day and hour, searchable with the index `recall` uses) | Delete one, an hour, or Delete all |
+
+### 4.2 Where each part lives
+
+- **The public app (`oss/`)**: capture, the timeline, `recall`, the observed-value rule, Pi's compaction prompt and the Settings page. They need only what any installed app can get (accessibility, notification access, location), so the app and the ROM run the same code, and the code that records is open to read.
+- **Private (`ondevice/`)**: the on-device model that will make episodes and the profile, through the app's `OnDeviceModel` interface. The public app has none, so it keeps the raw timeline and makes no summaries; it never sends the timeline to the cloud to summarise.
+- **The ROM (`aosp/vendor/agentos`)**: default location grants and running in the background. Capture does not move into Core: Core would gain no access the app lacks.
 
 ## 5. Costs
 

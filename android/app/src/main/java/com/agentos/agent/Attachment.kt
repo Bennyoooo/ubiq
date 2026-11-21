@@ -64,6 +64,54 @@ class Attachment private constructor(
                 }
             }, null)
 
+        /**
+         * The Pi harness takes text and images only. This turns [list] into a note for the message (names, where each
+         * is saved, text files' contents) and the images to send, with a PDF's first pages rendered as pictures.
+         */
+        fun forHarness(list: List<Attachment>): Pair<String, List<Attachment>> {
+            if (list.isEmpty()) return "" to emptyList()
+            val images = ArrayList<Attachment>()
+            val note = StringBuilder("\n\nAttached by the user (each is also saved on the phone, path given):")
+            for (a in list) {
+                note.append("\n- ").append(a.name).append(" (").append(a.mime).append(", ").append(a.bytes.size / 1024).append(" KB)")
+                    .append(a.savedAs?.let { " saved at $it" } ?: "")
+                when {
+                    a.isImage -> images += a
+                    a.isText -> {
+                        val body = String(a.bytes, Charsets.UTF_8)
+                        note.append("\nContents of ").append(a.name).append(":\n").append(if (body.length > 60_000) body.take(60_000) + "\n…(truncated)" else body)
+                    }
+                    a.isPdf -> {
+                        val pages = try { pdfPages(a) } catch (t: Throwable) { Log.w(TAG, "render ${a.name}", t); emptyList() }
+                        images += pages
+                        note.append(if (pages.isEmpty()) " (could not be rendered; open it from where it is saved)" else " (its first ${pages.size} page(s) are attached as images)")
+                    }
+                    else -> note.append(" (its contents cannot be shown inline)")
+                }
+            }
+            return note.toString() to images
+        }
+
+        private fun pdfPages(a: Attachment, max: Int = 4): List<Attachment> {
+            val f = java.io.File.createTempFile("attach", ".pdf")
+            try {
+                f.writeBytes(a.bytes)
+                android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                    android.graphics.pdf.PdfRenderer(fd).use { r ->
+                        return (0 until minOf(max, r.pageCount)).map { i ->
+                            r.openPage(i).use { p ->
+                                val scale = MAX_IMAGE_DIM.toFloat() / maxOf(p.width, p.height)
+                                val bmp = Bitmap.createBitmap((p.width * scale).toInt().coerceAtLeast(1), (p.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+                                bmp.eraseColor(android.graphics.Color.WHITE)
+                                p.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                fromBitmap("${a.name.substringBeforeLast('.')}-page${i + 1}.jpg", bmp)
+                            }
+                        }
+                    }
+                }
+            } finally { f.delete() }
+        }
+
         fun load(ctx: Context, uri: Uri): Attachment {
             val cr = ctx.contentResolver
             var name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"

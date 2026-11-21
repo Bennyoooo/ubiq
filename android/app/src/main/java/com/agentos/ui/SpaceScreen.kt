@@ -70,7 +70,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentos.space.Space
 
 /**
- * Space: the Library (the user's quick notes, the agent's memories, saved things) and Jobs
+ * Space: the Library (the user's quick notes, the agent's memories, saved things), the Timeline (what personal context
+ * recorded, see [TimelineTab]) and Jobs
  * (scheduled, recurring and triggered work the user set up by asking). Plain, like the ROM's
  * settings: lowercase text tabs with a light on the chosen one, rows without cards, a slot to type in.
  */
@@ -83,8 +84,8 @@ internal fun SpaceScreen(onBack: () -> Unit, onOpenChat: (String) -> Unit) {
             BubbleIcon(Icons.Default.Settings, "Settings",
                 { ctx.startActivity(android.content.Intent(ctx, SettingsActivity::class.java)) })
         }
-        LitTabs(listOf("library", "jobs"), tab, { tab = it }, Modifier.padding(start = 20.dp, top = 2.dp, bottom = 6.dp), big = true)
-        if (tab == 0) LibraryTab() else JobsTab(onOpenChat)
+        LitTabs(listOf("library", "timeline", "jobs"), tab, { tab = it }, Modifier.padding(start = 20.dp, top = 2.dp, bottom = 6.dp), big = true)
+        when (tab) { 0 -> LibraryTab(); 1 -> TimelineTab(); else -> JobsTab(onOpenChat) }
     }
 }
 

@@ -45,6 +45,7 @@ class ControlService : AccessibilityService() {
         Island.refresh()
         super.onServiceConnected()
         instance = this
+        com.agentos.voice.WakeWord.sync(this)
         Log.i(TAG, "Ubiq control service connected")
         // No accessibility button: a service that requests one gets only a "shortcut" switch in
         // Settings (Android 12+) and a floating button over every app. The assistant opens with a
@@ -74,6 +75,7 @@ class ControlService : AccessibilityService() {
         lastEventAt = SystemClock.uptimeMillis()
         event?.let { com.agentos.memory.Capture.onEvent(this, it) }
         event?.let { Autocomplete.onEvent(this, it) }
+        if (event?.packageName == "com.android.systemui") Island.statusBarChanged()
     }
 
     override fun onInterrupt() {}

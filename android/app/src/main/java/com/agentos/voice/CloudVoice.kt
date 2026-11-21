@@ -77,6 +77,8 @@ object CloudVoice {
         val keywords = runCatching { appNames(ctx) }.getOrDefault(emptyList())
         var spoke = false
         try {
+            // The opening sound plays out before the mic starts, so it isn't recorded (or taken for speech).
+            Earcons.start(ctx).takeIf { it > 0 }?.let { delay(it + 40) }
             rec.startRecording()
             coroutineScope {
                 // A running transcript while the user talks (every ~4 s of new audio, up to 2 minutes in).
@@ -110,6 +112,8 @@ object CloudVoice {
             runCatching { rec.stop() }; rec.release()
         }
         if (!spoke) return@withContext null
+        // Tapped to send (not cancelled by typing): the sending sound.
+        if (stopped()) Earcons.send(ctx)
         val text = try { transcribe(ctx, wav(pcm.toByteArray()), keywords) } catch (t: Throwable) { Log.w(TAG, "transcribe", t); onText("Couldn't transcribe: ${t.message}"); null }
         text?.trim()?.ifBlank { null }?.also(onText)
     }

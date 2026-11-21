@@ -30,9 +30,21 @@ class VoiceInput(private val ctx: Context) {
      */
     suspend fun dictate(onText: (String) -> Unit, onLevel: (Float) -> Unit = {}): String? {
         stopRequested = false
+        // Opened by "Hey Ubiq": nobody will tap the mic, so a pause after speaking sends it (and silence gives up).
+        val handsFree = WakeWord.takeHandsFree()
         // OpenAI transcription whenever a key is set, and on phones with no recognizer of their own (plain AOSP).
-        if (com.agentos.data.Prefs.isConfigured(ctx) || !CloudVoice.hasSystemRecognizer(ctx))
-            return CloudVoice.dictate(ctx, { stopRequested }, onText, onLevel)
+        if (com.agentos.data.Prefs.isConfigured(ctx) || !CloudVoice.hasSystemRecognizer(ctx)) {
+            if (!handsFree) return CloudVoice.dictate(ctx, { stopRequested }, onText, onLevel)
+            val started = android.os.SystemClock.elapsedRealtime()
+            var spokeAt = 0L; var quietSince = 0L
+            return CloudVoice.dictate(ctx, { stopRequested }, onText) { level ->
+                onLevel(level)
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (level > 0.2f) { spokeAt = now; quietSince = 0L } else if (quietSince == 0L) quietSince = now
+                if (spokeAt > 0 && quietSince > 0 && now - quietSince > 1500) stopRequested = true
+                if (spokeAt == 0L && now - started > 7000) stopRequested = true
+            }
+        }
         val r = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx))
             SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) else SpeechRecognizer.createSpeechRecognizer(ctx)
         recognizer = r
@@ -44,6 +56,8 @@ class VoiceInput(private val ctx: Context) {
                 val seg = segment(r) { onText(joined(it)) }
                 if (seg.text.isNotBlank()) { onText(joined(seg.text)); if (heard.isNotEmpty()) heard.append(' '); heard.append(seg.text); failures = 0 }
                 if (stopRequested) break
+                // Hands free: the recognizer's own end of speech ends it; one silent segment (~5 s) gives up.
+                if (handsFree && (heard.isNotEmpty() || seg.error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || seg.error == SpeechRecognizer.ERROR_NO_MATCH)) break
                 when (seg.error) {
                     null, SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {}
                     SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_CLIENT -> { delay(250); if (++failures > 4) break }

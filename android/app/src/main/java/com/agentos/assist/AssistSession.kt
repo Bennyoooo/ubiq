@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenInFull
@@ -122,6 +123,12 @@ class AssistSession(ctx: Context) : VoiceInteractionSession(ctx), LifecycleOwner
     private var session by mutableStateOf<com.agentos.agent.Session?>(null)
     private var sliceFrom by mutableStateOf(0)
     private var listenTick by mutableIntStateOf(0)
+    // Photos and files to send with the next message; kept here, not in the composition, so they survive the picker.
+    private var pending by mutableStateOf<List<Attachment>>(emptyList())
+    private var attaching by mutableStateOf(false)
+    private var attachMenu by mutableStateOf(false)
+    private var attachNote by mutableStateOf<String?>(null)
+    private var shown = false
 
     init { setTheme(com.agentos.R.style.Theme_AgentOS_Assist) }
 
@@ -149,12 +156,16 @@ class AssistSession(ctx: Context) : VoiceInteractionSession(ctx), LifecycleOwner
         // would also drop the new screen if the assist data ever came first (the order isn't guaranteed).
         val capture = showFlags and (SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT) != 0
         val fresh = args?.getBoolean(AgentVoiceService.ARG_FRESH) == true
-        if (capture || fresh || session == null) { screenshot = null; screenText = null; appLabel = null; useContext = true }
+        if (capture || fresh || session == null) {
+            screenshot = null; screenText = null; appLabel = null; useContext = true
+            pending = emptyList(); attaching = false; attachMenu = false; attachNote = null
+        }
     }
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
         registry.currentState = Lifecycle.State.RESUMED
+        shown = true
         val capture = showFlags and (SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT) != 0
         val fresh = args?.getBoolean(AgentVoiceService.ARG_FRESH) == true
         android.util.Log.i(TAG, "show flags=$showFlags fresh=$fresh app=$appLabel shot=${screenshot != null} text=${screenText?.length}")
@@ -176,6 +187,7 @@ class AssistSession(ctx: Context) : VoiceInteractionSession(ctx), LifecycleOwner
 
     override fun onHide() {
         super.onHide()
+        shown = false
         listening?.cancel(); listening = null
         if (registry.currentState.isAtLeast(Lifecycle.State.STARTED)) registry.currentState = Lifecycle.State.CREATED
     }
@@ -216,25 +228,47 @@ class AssistSession(ctx: Context) : VoiceInteractionSession(ctx), LifecycleOwner
 
     private fun hasContext() = useContext && appLabel != null && (screenshot != null || screenText != null)
 
-    private fun send(text: String) {
+    /** Camera, photos or file: the system picker runs in [AttachPickerActivity], over the app and this sheet. */
+    private fun attach(kind: String) {
+        attachMenu = false; attachNote = null
+        val intent = AttachPickerActivity.intent(context, kind, AttachPickerActivity.Request(
+            onLoading = { attaching = true },
+            onDone = { list, error ->
+                attaching = false; pending = pending + list; attachNote = error
+                // If the picker took the sheet down, bring it back with the attachments (not a fresh capture).
+                if (!shown) AgentVoiceService.reshow()
+            },
+        ))
+        val started = try { startAssistantActivity(intent); true } catch (t: Throwable) {
+            android.util.Log.w(TAG, "startAssistantActivity", t)
+            try { context.startActivity(intent); true } catch (t2: Throwable) { attachNote = "Could not open the picker: ${t2.message}"; false }
+        }
+        // The sheet sits above the picker and would cover its Add button (and take the first tap as "close"), and
+        // the mic would keep listening: step aside until the picker hands back (onDone re-shows the sheet).
+        if (started) hide()
+    }
+
+    private fun send(text: String, byVoice: Boolean = false) {
         val t = text.trim()
-        if (t.isEmpty()) return
+        val files = pending
+        if (t.isEmpty() && files.isEmpty()) return
+        pending = emptyList(); attachMenu = false; attachNote = null
         Speaker.stop()
         val s = session ?: AgentRuntime.main.also { session = it; sliceFrom = it.items.value.size; it.assistUi = ui }
-        if (!hasContext()) { s.send(t, fromAssist = true); return }
+        if (!hasContext()) { s.send(t, files, fromAssist = true, byVoice = byVoice); return }
         // After the agent has acted, the captured screen is out of date: keep working on the same
         // app, but have the agent look again rather than trust the old screenshot.
         if (s.items.value.drop(sliceFrom).any { it.role == Role.ACTION }) {
-            s.send(t, modelText = "[Still about $appLabel, which is on screen; it may have changed since, so read the screen before acting.]\n$t", onScreen = true, fromAssist = true)
+            s.send(t, files, modelText = "[Still about $appLabel, which is on screen; it may have changed since, so read the screen before acting.]\n$t", onScreen = true, fromAssist = true, byVoice = byVoice)
             return
         }
         val model = buildString {
-            append("[I'm looking at ").append(appLabel).append(" right now. The attached screenshot shows my screen; the request is about it.]\n")
-            append(t)
+            append("[I'm looking at ").append(appLabel).append(" right now. The first attached image is a screenshot of my screen; the request is about it.]\n")
+            append(t.ifEmpty { "(see the attachments)" })
             screenText?.let { append("\n\n(Text on that screen:\n").append(it.take(3500)).append(")") }
         }
         val shot = screenshot?.let { listOf(Attachment.fromBitmap("screen.jpg", it)) } ?: emptyList()
-        s.send(t, shot, modelText = model, onScreen = true, fromAssist = true)
+        s.send(t, shot + files, modelText = model, onScreen = true, fromAssist = true, byVoice = byVoice)
     }
 
     private fun openFull() {
@@ -273,11 +307,12 @@ class AssistSession(ctx: Context) : VoiceInteractionSession(ctx), LifecycleOwner
             val vi = VoiceInput(context)
             if (!vi.available) return
             Speaker.stop()
+            com.agentos.agent.PiRuntime.prewarm(context)
             isListening = true; partial = ""; voice = vi
             listening = scope.launch {
                 val r = try { vi.dictate(onText = { partial = it }) } finally { isListening = false; voice = null }
                 partial = ""
-                if (!r.isNullOrBlank()) send(r)
+                if (!r.isNullOrBlank()) send(r, byVoice = true)
             }
         }
 
@@ -333,14 +368,39 @@ class AssistSession(ctx: Context) : VoiceInteractionSession(ctx), LifecycleOwner
                     if (isListening) Text(partial.ifBlank { "listening… tap the mic to send" }, Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                         color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge)
 
+                    if (pending.isNotEmpty() || attaching || attachNote != null) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            pending.forEach { a -> com.agentos.ui.PendingAttachment(a, onRemove = { pending = pending - a }) }
+                            if (attaching) Text("Loading…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            attachNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The + turns into an x while the attach list is open, as in the conversation.
+                        Box {
+                            com.agentos.ui.BubbleIcon(if (attachMenu) Icons.Default.Close else Icons.Default.Add, if (attachMenu) "Close" else "Attach", { attachMenu = !attachMenu },
+                                size = 30.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            // The conversation's attach list, floating just above the +.
+                            if (attachMenu) {
+                                val lift = with(androidx.compose.ui.platform.LocalDensity.current) { (30 + 16).dp.roundToPx() }
+                                androidx.compose.ui.window.Popup(alignment = Alignment.BottomStart, offset = androidx.compose.ui.unit.IntOffset(0, -lift),
+                                    onDismissRequest = { attachMenu = false }, properties = androidx.compose.ui.window.PopupProperties(focusable = true)) {
+                                    com.agentos.ui.AttachList(
+                                        onCamera = { attach(AttachPickerActivity.KIND_CAMERA) },
+                                        onPhotos = { attach(AttachPickerActivity.KIND_PHOTOS) },
+                                        onFile = { attach(AttachPickerActivity.KIND_FILE) })
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(4.dp))
                         OutlinedTextField(input, { input = it; if (isListening) { listening?.cancel(); isListening = false } }, Modifier.weight(1f),
-                            placeholder = { Text(if (status is AgentStatus.WaitingForUser) "Answer…" else if (hasContext()) "ask about this screen" else "ask ubiq") },
+                            placeholder = { Text(if (status is AgentStatus.WaitingForUser) "Answer…" else if (pending.isNotEmpty()) "say what to do with it" else if (hasContext()) "ask or say what to do here" else "ask ubiq") },
                             shape = RoundedCornerShape(24.dp), maxLines = 3, colors = com.agentos.ui.brandFieldColors())
                         Spacer(Modifier.width(6.dp))
                         com.agentos.ui.MicButton(isListening, onStart = { listen() }, onStop = { voice?.stop() })
                         // While it works: Send queues the message for the agent's next step; Stop shows when there is nothing to send.
-                        if (status is AgentStatus.Running && input.isBlank()) {
+                        if (status is AgentStatus.Running && input.isBlank() && pending.isEmpty()) {
                             com.agentos.ui.IconKey(Icons.Default.Stop, "Stop", { s.cancel(com.agentos.agent.Session.CANCEL_SHEET) }, com.agentos.ui.KeyColor.Red)
                         } else com.agentos.ui.IconKey(Icons.Default.Send, "Send", { val t = input; input = ""; send(t) }, com.agentos.ui.KeyColor.Yellow)
                     }

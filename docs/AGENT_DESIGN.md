@@ -125,6 +125,18 @@ The agent uses the cheapest, most reliable rung that works. Cyclon's code credit
 | **GUI as text** | UiAutomation or accessibility tree, `navigate`, `read_list` | Cheap and exact. Work with small, text-only models |
 | **GUI as pixels** | Screenshots with lettered labels on the elements | Only for canvases, maps, unlabeled icons, image content. Needs a vision model |
 
+### Fast paths (2026-11-12)
+
+Some requests people expect to be instant. Three layers make them fast:
+
+- **One-step tools** (`agent/QuickActions.kt`): `weather` (Open-Meteo, no app), `directions` (Google Maps `google.navigation:` or a Waze link, started on the main screen), `play_media` (the app's media session `playFromSearch` when it has one, else the `MEDIA_PLAY_FROM_SEARCH` intent, else a search deep link; playback is confirmed from the session). Which app: the one named; else the only one installed; else the one used last (usage stats, granted through Shizuku, or our own launches); with none used or none installed, ask.
+- **Express lane** (`agent/Express.kt`): a short, plain message that passes a keyword gate goes to a small model (`gpt-6-luna`, strict schema) that returns one of weather / directions / play with its arguments, or none. Code runs the tool and answers from a template, without Pi or the main model. Anything unclear (none, the tool would ask, failed, playback unconfirmed) falls through to the normal turn, which hears what the quick try did. Express replies are spoken only when the message came by voice. Pi is prewarmed while the classifier runs and when the mic opens.
+- **Replayable routes** (`agent/Routes.kt`): every screen action is recorded with the element it hit. When a turn ends well, the steps after the last launch of the app it ended in are kept, minus dead ends (no change, undone by back), stopping before anything with a receipt. Typed text from the request becomes a value slot. Matching routes are listed in the next request's message; `replay_route` repeats them in code and stops with the screen at the first mismatch. A route that breaks more often than it works is dropped.
+
+Measured on the emulator (2026-11-12): "will it rain tomorrow" 1.8 s express against about 12 s through Pi; "take me to SFO airport" 2.2 s to navigation running; "battery usage in Settings" 46 s the first time, 13.9 s with the learned route. Phase timings are in the trace and logcat (`AgentOS/Time`).
+
+Next: express replay of routes without the main model; app shortcuts (`LauncherApps`) and a hand-written deep link list for the top apps.
+
 ### Code and shell on the phone
 
 - **A normal app** gets `/system/bin/sh` and toybox (grep, sed, ls). It can see only its own files, and there is no Python.

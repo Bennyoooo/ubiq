@@ -180,6 +180,7 @@ private fun SettingsScreen() {
                 }
                 Spacer(Modifier.height(6.dp))
             }
+            HeyUbiqRows()
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Let the agent look at screenshots", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge); Switch(shots, { shots = it; Prefs.setUseScreenshots(ctx, it) }, colors = brandSwitch())
             }
@@ -195,6 +196,11 @@ private fun SettingsScreen() {
             var nav by remember { mutableStateOf(Prefs.navigator(ctx)) }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Quick navigator (a small model taps through apps)", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge); Switch(nav, { nav = it; Prefs.setNavigator(ctx, it) }, colors = brandSwitch())
+            }
+            Spacer(Modifier.height(6.dp))
+            var express by remember { mutableStateOf(Prefs.expressLane(ctx)) }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Express lane (weather, directions and music answered at once)", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge); Switch(express, { express = it; Prefs.setExpressLane(ctx, it) }, colors = brandSwitch())
             }
             Spacer(Modifier.height(6.dp))
             var complete by remember { mutableStateOf(Prefs.autocomplete(ctx)) }
@@ -274,6 +280,49 @@ private fun SettingsScreen() {
         Spacer(Modifier.height(16.dp))
         Text("Ubiq 0.1 • requests go directly from this phone to api.openai.com" + (if (com.agentos.agent.OnDeviceModel.installed != null) "; on-device requests never leave it" else ""),
             Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** "Hey Ubiq" (voice/WakeWord): the switch, then with it on, screen-off listening and how keen it is. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun HeyUbiqRows() {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(Prefs.wakeWord(ctx)) }
+    var screenOff by remember { mutableStateOf(Prefs.wakeScreenOff(ctx)) }
+    var sensitivity by remember { mutableStateOf(Prefs.wakeSensitivity(ctx)) }
+    val state by com.agentos.voice.WakeWord.state.collectAsStateWithLifecycle()
+    val mic = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        on = ok; Prefs.setWakeWord(ctx, ok); com.agentos.voice.WakeWord.sync(ctx)
+    }
+    fun set(v: Boolean) {
+        if (v && ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { mic.launch(android.Manifest.permission.RECORD_AUDIO); return }
+        on = v; Prefs.setWakeWord(ctx, v); com.agentos.voice.WakeWord.sync(ctx)
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Wake with \"Hey Ubiq\"", style = MaterialTheme.typography.bodyLarge)
+            Text(when {
+                !on -> "Say it to open Ubiq, hands free. Heard on the phone only."
+                state == com.agentos.voice.WakeWord.State.Listening -> "Listening, on the phone only"
+                state == com.agentos.voice.WakeWord.State.Yielding -> "Paused while something else uses the mic"
+                state == com.agentos.voice.WakeWord.State.Paused -> "Paused while the screen is off"
+                state == com.agentos.voice.WakeWord.State.Error -> "Can't listen right now"
+                else -> "Starting…"
+            }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(on, { set(it) }, colors = brandSwitch())
+    }
+    if (on) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Also with the screen off", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Switch(screenOff, { screenOff = it; Prefs.setWakeScreenOff(ctx, it); com.agentos.voice.WakeWord.sync(ctx) }, colors = brandSwitch())
+        }
+        FieldLabel("How easily it wakes")
+        androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+            listOf(0 to "strict", 1 to "normal", 2 to "eager").forEach { (v, l) -> BrandChip(sensitivity == v, l) { sensitivity = v; Prefs.setWakeSensitivity(ctx, v) } }
+        }
+        Spacer(Modifier.height(6.dp))
     }
 }
 
@@ -413,35 +462,6 @@ private fun CallScreeningSection() {
     }
 }
 
-/** The owner's timeline (docs/MEMORY.md): pause it, see how much it holds, delete it. */
-@Composable
-private fun PersonalContextSection() {
-    val ctx = LocalContext.current
-    var on by remember { mutableStateOf(Prefs.personalContext(ctx)) }
-    var tick by remember { mutableStateOf(0) }
-    val stats by produceState(0L to 0L, tick) { value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.agentos.memory.Lifelog.stats() } }
-    var confirm by remember { mutableStateOf(false) }
-    Text("Ubiq keeps a private timeline on this phone of the screens you look at (as text), your notifications and the places you stay, " +
-        "so it can remember things for you. Passwords, codes and password-manager apps are never recorded. Nothing leaves the phone except what a request needs, " +
-        "and Ubiq asks before using anything from it in an action. Kept for ${com.agentos.memory.Lifelog.KEEP_DAYS} days.",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Spacer(Modifier.height(8.dp))
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("Record personal context", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(on, { on = it; Prefs.setPersonalContext(ctx, it) }, colors = brandSwitch())
-    }
-    Text("${stats.first} moments, ${stats.second / 1024} KB of text", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    if (!com.agentos.memory.Places.allowed(ctx)) {
-        Spacer(Modifier.height(8.dp))
-        PillButton("Allow location for places", { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${ctx.packageName}"))) }, Modifier.fillMaxWidth())
-    }
-    Spacer(Modifier.height(8.dp))
-    SoftPillButton(if (confirm) "Tap again to delete everything" else "Delete all", {
-        if (!confirm) confirm = true
-        else { confirm = false; com.agentos.agent.AgentRuntime.scope.launch { com.agentos.memory.Lifelog.clear(); tick++ } }
-    }, Modifier.fillMaxWidth())
-}
-
 /** A titled group of settings on a pebble card. */
 @Composable
 internal fun Section(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
@@ -465,11 +485,11 @@ internal fun BrandChip(selected: Boolean, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun brandSwitch() = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primaryContainer, checkedThumbColor = Color.White,
+internal fun brandSwitch() = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primaryContainer, checkedThumbColor = Color.White,
     checkedIconColor = MaterialTheme.colorScheme.onPrimaryContainer)
 
 @Composable
-private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
+internal fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
     unfocusedBorderColor = Color.Transparent, focusedBorderColor = MaterialTheme.colorScheme.primaryContainer,
 )

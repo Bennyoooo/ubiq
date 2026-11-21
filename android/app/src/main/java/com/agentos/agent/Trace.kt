@@ -34,6 +34,12 @@ object Trace {
         }
     }
 
+    /** A phase's duration, for "where does the time go": in the trace and in logcat (tag AgentOS/Time). */
+    fun time(session: String?, phase: String, ms: Long) {
+        Log.i("AgentOS/Time", "${session ?: "-"} $phase ${ms} ms")
+        if (session != null) log(session, "time", "$phase ${ms} ms")
+    }
+
     fun delete(session: String) {
         val d = dir ?: return
         writer.execute { File(d, "$session.jsonl").delete(); File(d, "$session.old.jsonl").delete() }

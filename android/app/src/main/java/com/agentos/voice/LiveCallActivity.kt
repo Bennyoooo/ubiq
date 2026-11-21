@@ -221,12 +221,13 @@ private fun VoiceLeds(phase: LiveCall.Phase, level: Float) {
 @Composable
 private fun Transcript(lines: List<LiveCall.Line>, modifier: Modifier) {
     val state = rememberLazyListState()
-    LaunchedEffect(lines.size) { if (lines.isNotEmpty()) state.animateScrollToItem(lines.size - 1) }
+    // A long answer is shown whole (no line cap) and the view follows its end as it grows, not its first line.
+    LaunchedEffect(lines.size, lines.lastOrNull()?.text?.length) { if (lines.isNotEmpty()) state.scrollToItem(lines.size - 1, Int.MAX_VALUE) }
     LazyColumn(modifier.fillMaxWidth(), state = state, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(lines, key = { it.id }) { l ->
             Text(l.text, Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyLarge,
                 color = if (l.who == LiveCall.Who.USER) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
-                textAlign = if (l.who == LiveCall.Who.USER) TextAlign.End else TextAlign.Start, maxLines = 6, overflow = TextOverflow.Ellipsis)
+                textAlign = if (l.who == LiveCall.Who.USER) TextAlign.End else TextAlign.Start)
         }
     }
 }

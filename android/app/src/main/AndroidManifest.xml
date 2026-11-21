@@ -15,6 +15,8 @@
     <!-- Live mode (voice/LiveCall): a call that goes on with the screen off, routed to the earpiece, speaker or a headset. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- "Hey Ubiq" heard while Ubiq has neither the assistant role nor its accessibility service: a tap-to-talk call-style alert. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- The chat's camera button; asked for on first use. -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -25,6 +27,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Bring a workspace's floor back to the front on its own display. -->
     <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <!-- Which maps / music app the user used last (agent/QuickActions DefaultApps); granted as an app op via Shizuku. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
     <!-- Connectors: the phone's calendars and contacts; payment approval by fingerprint. -->
@@ -73,6 +78,13 @@
         android:theme="@style/Theme.AgentOS"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- The assistant sheet's camera, photos and file buttons (assist/AttachPickerActivity). -->
+        <activity
+            android:name=".assist.AttachPickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.AgentOS.Assist" />
         <activity
             android:name=".pay.PaymentApproval$ApprovalActivity"
             android:exported="false"
@@ -118,6 +130,11 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
         <receiver android:name=".voice.LiveCallService$HangUpReceiver" android:exported="false" />
+        <!-- "Hey Ubiq": the on-phone wake word keeps listening in the background (voice/WakeWord). -->
+        <service
+            android:name=".voice.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Call screening: Ubiq answers callers who aren't in the contacts (phone/CallScreening). -->
         <service

@@ -93,6 +93,7 @@ Set the other two to null. Never pick an action the recent steps show had no eff
             val snap = next ?: svc.snapshot(target.displayId, target.maxNodes)
             next = null
             target.lastPackage = snap.packageName
+            target.lastSnap = snap
             val sig = signature(snap)
             val menu = menu(snap, values)
             val screen = describe(snap, menu, target.secrets)

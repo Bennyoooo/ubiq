@@ -75,7 +75,7 @@ object Effects {
     private val GATHER = setOf("gmail_search", "calendar_events", "contacts_search", "read_notifications", "unreplied_messages", "space_search", "list_jobs")
     /** A request to delete or clear many things at once. */
     private val BULK = Regex("\\b(all|every|everything|entire|whole)\\b[^.?!]{0,40}\\b(delete|remove|clear|erase|wipe|trash)|\\b(delete|remove|clear|erase|wipe|trash)\\b[^.?!]{0,40}\\b(all|every|everything|entire|whole)\\b|\\b(factory reset|wipe (the |my )?phone)\\b", RegexOption.IGNORE_CASE)
-    private val ACTIONS = setOf("tap", "tap_xy", "long_press", "type_text", "scroll", "swipe", "press", "open_app", "open_notification", "show_user")
+    private val ACTIONS = setOf("tap", "tap_xy", "long_press", "type_text", "scroll", "swipe", "press", "open_app", "open_notification", "show_user", "directions", "play_media", "replay_route")
 
     /**
      * Runs one tool call through the ledger: refuses writes while an op is unknown, records an

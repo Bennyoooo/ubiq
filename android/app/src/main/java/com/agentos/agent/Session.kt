@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -68,6 +69,9 @@ class Session(val id: String, title: String, val created: Long) {
     internal var recap = ""
     private var job: Job? = null
     private var pendingAnswer: CompletableDeferred<JSONObject>? = null
+    /** Photos and files sent with the answer to a Pi ask_user; [takeAnswerFiles] hands them to the tool result. */
+    @Volatile private var answerFiles: List<Attachment> = emptyList()
+    internal fun takeAnswerFiles(): List<Attachment> = answerFiles.also { answerFiles = emptyList() }
     /** The answer keys of the question this session is waiting on, if it asked with keys. */
     @Volatile private var pendingOptions: List<String> = emptyList()
     /** Messages the user (or a rule) sent while a task was running; the agent reads them at its next step. */
@@ -153,6 +157,10 @@ class Session(val id: String, title: String, val created: Long) {
     @Volatile var assistUi: AgentRuntime.AssistUi? = null
     /** True while the running turn came from the assistant sheet and works on the visible app. */
     @Volatile private var turnFromAssist = false
+    /** This turn's message was spoken (dictation, the assistant's mic): express replies are read out only then. */
+    @Volatile private var turnByVoice = false
+    /** What the express lane did since the model last heard (it bypasses the model), for the next turn's message. */
+    private val expressNotes = java.util.concurrent.ConcurrentLinkedQueue<String>()
     @Volatile private var assistHidden = false
 
     /**
@@ -160,7 +168,7 @@ class Session(val id: String, title: String, val created: Long) {
      * screen's text added by the assistant sheet). [onScreen] runs the task on the visible screen
      * even in background mode, because it is about the app the user is in.
      */
-    fun send(text: String, attachments: List<Attachment> = emptyList(), modelText: String? = null, onScreen: Boolean = false, fromAssist: Boolean = false) {
+    fun send(text: String, attachments: List<Attachment> = emptyList(), modelText: String? = null, onScreen: Boolean = false, fromAssist: Boolean = false, byVoice: Boolean = false) {
         val t = text.trim()
         if (t.isEmpty() && attachments.isEmpty()) return
         // Only the user's own words pick a demo, never screen text the assistant sheet adds for the model.
@@ -173,7 +181,7 @@ class Session(val id: String, title: String, val created: Long) {
             if (isActive) cancel(CANCEL_NEW_DEMO, quiet = true)
         }
         _items.update { it + ChatItem(Role.USER, t, attachments = attachments) }
-        Trace.log(id, "USER", t)
+        Trace.log(id, "USER", secrets.redact(t) + attachments.joinToString("") { "\n[attached ${it.name}, ${it.mime}]" })
         synchronized(owner) { owner.append(t).append('\n') }
         if (title.value.isBlank() || title.value == NEW_TITLE) title.value = t.lineSequence().first().take(48)
         AgentRuntime.changed(this)
@@ -191,6 +199,7 @@ class Session(val id: String, title: String, val created: Long) {
             setStatus(AgentStatus.Running(0, WORKING))
             parentId?.let { AgentRuntime.session(it) }?.clearNotice(41)
             clearNotice(41)
+            answerFiles = attachments
             d.complete(OpenAi.userMessage(forModel, attachments))
             return
         }
@@ -201,9 +210,11 @@ class Session(val id: String, title: String, val created: Long) {
             return
         }
         synchronized(news) {
-            turnFromAssist = fromAssist; assistHidden = false; turnGuarded = false
+            turnFromAssist = fromAssist; assistHidden = false; turnGuarded = false; turnByVoice = byVoice
             setStatus(AgentStatus.Running(0, WORKING))
-            job = scope.launch { runTurn(forModel, attachments, onScreen, demo = demo) }
+            // Only the owner's own plain words can take the express lane (not a demo, a reply to a quote, nor a request about the screen).
+            val plain = demo == null && modelText == null && attachments.isEmpty() && !onScreen
+            job = scope.launch { if (!(plain && tryExpress(t))) runTurn(forModel, attachments, onScreen, demo = demo) }
         }
     }
 
@@ -586,12 +597,45 @@ class Session(val id: String, title: String, val created: Long) {
         }
     }
 
+    /**
+     * The express lane ([Express]): a plain weather / directions / play request is done without the main model.
+     * Returns false, with nothing said, when the message is not one of those or the quick try could not finish it;
+     * then the normal turn runs (and hears what the quick try did).
+     */
+    private suspend fun tryExpress(text: String): Boolean {
+        if (parentId != null || taskReports.isNotEmpty() || !Express.eligible(ctx, text)) return false
+        val start = android.os.SystemClock.uptimeMillis()
+        // If this turns out not to be express, the harness is warm by the time the normal turn needs it.
+        PiRuntime.prewarm(ctx)
+        val m = Express.classify(ctx, text, _items.value.lastOrNull { it.role == Role.ASSISTANT }?.text)
+        Trace.time(id, "express classify (${m?.action ?: "none"})", android.os.SystemClock.uptimeMillis() - start)
+        if (m == null) return false
+        turnStartedAt = start; turnSteps = 1; turnTools = 1
+        val t = TaskTarget(false, this).also { it.request = text }
+        target = t; runsOnScreen = true
+        post(Role.ACTION, describeCall(m.action, m.args))
+        val o = try { Express.run(ctx, m, t) } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (e: Throwable) { Log.w(TAG, "express", e); Express.Outcome(null, null) }
+        if (o.reply == null) {
+            o.note?.let { expressNotes.add(it) }
+            target = null; t.close()
+            return false
+        }
+        heard(o.reply)
+        expressNotes.add("(Answered at once without you, earlier: the user said \"${text.take(200)}\" and the reply was \"${o.reply.take(300)}\".)")
+        Trace.log(id, "express", "${m.action} ${m.args} -> ${o.reply}")
+        Trace.time(id, "express total", android.os.SystemClock.uptimeMillis() - start)
+        finish(o.reply, false, speak = if (turnByVoice) o.reply else null)
+        return true
+    }
+
     private suspend fun runTurn(requestText: String, attachments: List<Attachment> = emptyList(), onScreen: Boolean = false, guarded: Boolean = false,
                                 asked: String = requestText, demo: Playbooks.Playbook? = null) {
         // Results of background tasks that ended since the last turn go in front of the message (the model's view only).
         val reports = drainTaskReports()
         if (reports.isNotEmpty()) heard(reports)
-        val userText = reports + elsewhere() + liveTasks() + DeviceConditions.note(ctx) + requestText
+        val express = generateSequence { expressNotes.poll() }.joinToString("\n").let { if (it.isEmpty()) "" else it + "\n" }
+        val routes = Routes.forPrompt(ctx, requestText).let { if (it.isEmpty()) "" else "(Saved routes that may fit; replay_route reaches the page in one call:\n$it)\n" }
+        val userText = reports + express + elsewhere() + liveTasks() + DeviceConditions.note(ctx) + routes + requestText
         val svc = ControlService.instance
         openedMiniApp = false
         applyForget()
@@ -634,7 +678,7 @@ class Session(val id: String, title: String, val created: Long) {
         fun instructionsFor(e: ModelRouter.Engine) =
             if (e == ModelRouter.Engine.LOCAL && local != null) local.instructions(apps.describe(), miniAppList, svc != null, background)
             else SystemPrompt.build(apps.describe(), miniAppList, svc != null, background,
-                connectors = com.agentos.connect.Connectors.describe(ctx), space = space, navigator = Prefs.navigator(ctx))
+                connectors = com.agentos.connect.Connectors.describe(ctx), space = space, navigator = Prefs.navigator(ctx), onUserScreen = turnFromAssist && !background)
         fun toolsFor(e: ModelRouter.Engine) = JSONArray().apply { AgentTools.definitions(ctx).forEach { if (e == ModelRouter.Engine.CLOUD || local == null || it.optString("name") in local.toolNames) put(it) } }
         var instructions = instructionsFor(engine.engine)
         var tools = toolsFor(engine.engine)
@@ -656,6 +700,7 @@ class Session(val id: String, title: String, val created: Long) {
                 val pending = JSONArray(pendingOutputs.toString())
                 if (rid != null) scope.launch { Memory.review(ctx, this@Session, rid, pending, request.toString(), app, effort) }
             }
+            try { Routes.learn(ctx, target) } catch (t: Throwable) { Log.w(TAG, "routes", t) }
             finish(summary, usedPhone, speak)
         }
 
@@ -737,7 +782,7 @@ class Session(val id: String, title: String, val created: Long) {
                     setStatus(AgentStatus.Running(step, WORKING))
                     AgentRuntime.refreshOverlay()
                     val phoneTool = fc.name !in setOf("done", "ask_user", "create_mini_app", "update_mini_app", "open_mini_app", "get_mini_app_logs",
-                        "read_notifications", "summarize_notifications", "start_task", "task_status", "pass_to_task", "update_user") &&
+                        "read_notifications", "summarize_notifications", "start_task", "task_status", "pass_to_task", "update_user", "weather") &&
                         fc.name !in com.agentos.connect.Connectors.names && fc.name !in com.agentos.jobs.JobTools.names && fc.name !in com.agentos.memory.Recall.names
                     if (phoneTool) usedPhone = !target.workspace
                     turnTools++
@@ -835,8 +880,11 @@ class Session(val id: String, title: String, val created: Long) {
     private suspend fun runHarnessTurn(userText: String, requestText: String, attachments: List<Attachment>, target: TaskTarget, background: Boolean) {
         val request = StringBuilder(requestText)
         harnessRequest = request; harnessUsedPhone = false
-        val instructions = SystemPrompt.build(apps.describe(), MiniAppPlugin.installed?.describe().orEmpty(), ControlService.instance != null, background,
-            connectors = com.agentos.connect.Connectors.describe(ctx), space = Memory.select(ctx, requestText), navigator = Prefs.navigator(ctx), harness = true)
+        // Picking memories (a small model call) runs while the harness starts, not before it.
+        val space = scope.async {
+            val t = android.os.SystemClock.uptimeMillis()
+            Memory.select(ctx, requestText).also { Trace.time(id, "memory select", android.os.SystemClock.uptimeMillis() - t) }
+        }
         val steering = scope.launch {
             while (true) {
                 val late = lateInputs.poll()
@@ -852,18 +900,29 @@ class Session(val id: String, title: String, val created: Long) {
             // A deleted message: Pi starts a new session, told only what is still in the chat.
             val fresh = forgetPi
             val earlier = if (fresh) recapOfItems(12).let { r -> if (r.isBlank()) "" else "(Earlier in our conversation:\n$r)\n\n" } else ""
-            var text = "(${SystemPrompt.now()})\n$earlier$userText"
-            var files = attachments
+            val (fileNote, images) = Attachment.forHarness(attachments)
+            var text = "(${SystemPrompt.now()})\n$earlier$userText$fileNote"
+            var files = images
             var corrected = false
             var first = true
+            val tPi = android.os.SystemClock.uptimeMillis()
             PiRuntime.use(ctx) {
+                Trace.time(id, "pi ready", android.os.SystemClock.uptimeMillis() - tPi)
+                val instructions = SystemPrompt.build(apps.describe(), MiniAppPlugin.installed?.describe().orEmpty(), ControlService.instance != null, background,
+                    connectors = com.agentos.connect.Connectors.describe(ctx), space = space.await(), navigator = Prefs.navigator(ctx), harness = true,
+                    onUserScreen = turnFromAssist && !background)
                 while (true) {
+                    val tModel = android.os.SystemClock.uptimeMillis()
+                    var firstEvent = true
                     val r = Harness.turn(ctx, id, text, files, instructions, fresh = fresh && first) { ev ->
-                        when (ev.optString("type")) {
+                        val type = ev.optString("type")
+                        if (firstEvent && (type == "text" || type == "tool")) { firstEvent = false; Trace.time(id, "first $type", android.os.SystemClock.uptimeMillis() - tModel) }
+                        when (type) {
                             "text" -> ev.optString("text").takeIf { it.isNotBlank() }?.let { post(Role.ASSISTANT, it) }
                             "tool" -> harnessToolEvents.incrementAndGet()
                         }
                     }
+                    Trace.time(id, "harness turn", android.os.SystemClock.uptimeMillis() - tModel)
                     if (first && fresh) forgetPi = false
                     first = false
                     if (r.error != null) { finish("The Pi harness stopped: ${r.error.take(300)}", harnessUsedPhone); return@use }
@@ -876,6 +935,7 @@ class Session(val id: String, title: String, val created: Long) {
                         continue
                     }
                     if (r.text.isNotBlank()) post(Role.ASSISTANT, r.text)
+                    try { Routes.learn(ctx, target) } catch (t: Throwable) { Log.w(TAG, "routes", t) }
                     finish(null, harnessUsedPhone, speak = r.text)
                     return@use
                 }
@@ -892,6 +952,7 @@ class Session(val id: String, title: String, val created: Long) {
             finish("Lost the Pi harness: ${e.message?.take(200)}", harnessUsedPhone)
         } finally {
             steering.cancel()
+            space.cancel()
             ToolHost.unbind(id)
             harnessRequest = null
         }
@@ -908,7 +969,7 @@ class Session(val id: String, title: String, val created: Long) {
         setStatus(AgentStatus.Running(turnSteps, WORKING))
         AgentRuntime.refreshOverlay()
         val phoneTool = name !in setOf("ask_user", "create_mini_app", "update_mini_app", "open_mini_app", "get_mini_app_logs", "read_notifications", "summarize_notifications",
-            "start_task", "task_status", "pass_to_task", "update_user") &&
+            "start_task", "task_status", "pass_to_task", "update_user", "weather") &&
             name !in com.agentos.connect.Connectors.names && name !in com.agentos.jobs.JobTools.names && name !in com.agentos.memory.Recall.names
         if (phoneTool) harnessUsedPhone = target?.workspace != true
         if (phoneTool && turnFromAssist && target?.workspace != true && !assistHidden) { assistHidden = true; assistUi?.hideForAction() }
@@ -938,6 +999,7 @@ class Session(val id: String, title: String, val created: Long) {
         if (turnFromAssist && assistHidden) { assistHidden = false; withContext(Dispatchers.Main) { com.agentos.assist.AgentVoiceService.reshow() } }
         else if (!turnFromAssist) announceQuestion(question, options)
         val deferred = CompletableDeferred<JSONObject>()
+        answerFiles = emptyList()
         pendingAnswer = deferred
         pendingOptions = options
         setStatus(AgentStatus.WaitingForUser(question))
@@ -1142,6 +1204,10 @@ class Session(val id: String, title: String, val created: Long) {
         "pass_to_task" -> "Pass your message to the task"
         "update_user" -> "Send news to the conversation"
         "show_user" -> "Put it on your screen"
+        "weather" -> "Check the weather" + input.optString("place").let { if (it.isBlank()) "" else " in $it" }
+        "directions" -> "Directions to ${input.optString("destination").take(48)}"
+        "play_media" -> "Play ${input.optString("query").ifBlank { "music" }.take(48)}"
+        "replay_route" -> "Follow saved route ${input.optString("id")}"
         "read_list" -> "Read list"
         "reconcile_effect" -> "Check op ${input.optInt("op_id")}"
         "done" -> "Finish"

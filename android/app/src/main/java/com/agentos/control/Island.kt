@@ -21,9 +21,9 @@ import com.agentos.agent.AgentRuntime
 import com.agentos.agent.AgentStatus
 
 /**
- * Ubiq's island (docs/UX_SPEC.md): a thin ring of light around the front camera. Yellow when a task needs
- * you, green when one finished and you haven't seen it, breathing white while Ubiq works. On home the camera
- * is tappable even with no light; elsewhere it appears only with a light, over
+ * Ubiq's island (docs/UX_SPEC.md): a small lamp just right of the front camera, no background. Yellow when a
+ * task needs you, green when one finished and you haven't seen it, breathing white while Ubiq works, a dim
+ * unlit lamp when idle. On home it is always there; elsewhere it appears only with a light, over
  * any app and over fullscreen video. Tap it to open the conversation the light is about.
  *
  * During a live call (voice/LiveCall) it widens into a call pill: a breathing green light left of the camera and
@@ -79,7 +79,8 @@ object Island {
         view = null
     }
 
-    private class Box(val x: Int, val y: Int, val w: Int, val h: Int, val hole: Float)
+    /** [lamp]: where the light goes, in the window's own coordinates (x, y, radius); unused by the call pill. */
+    private class Box(val x: Int, val y: Int, val w: Int, val h: Int, val hole: Float, val lamp: FloatArray = floatArrayOf(0f, 0f, 0f))
 
     /**
      * Where the pill goes: the prototype's island (64 x 28 on its 286-wide canvas, so about 92 x 40 dp
@@ -100,7 +101,6 @@ object Island {
             val d = minOf(r.width().toFloat(), 22 * u); val cy = minOf(r.height() / 2f, d)
             android.graphics.RectF(r.centerX() - d / 2, cy - d / 2, r.centerX() + d / 2, cy + d / 2)
         }
-        Log.i(TAG, "cutout path=$path rect=${cutout?.boundingRectTop} -> hole=$hole")
         val bar = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top
         if (call) {
             val h = maxOf(28 * u, (hole?.height() ?: 0f) + 8 * u).toInt()
@@ -110,15 +110,71 @@ object Island {
             val cy = hole?.centerY() ?: (bar / 2f)
             return Box((cx - w / 2f).toInt(), (cy - h / 2f).toInt().coerceAtLeast(0), w, h, hole?.width() ?: 0f)
         }
-        // Otherwise a thin ring around the camera (user feedback 2026-11-15: the pill was thick and covered the clock).
-        // Rule: the ring never leaves the cutout's bounding rect, the strip SystemUI keeps its icons out of, so it
-        // cannot cover an icon on any phone. Without a bounding rect, a few units around the hole.
+        // Otherwise a lamp just right of the camera, no background (user design 2026-11-16; 2026-11-17: bigger and
+        // easier to tap). The window is the cutout strip (SystemUI keeps its icons out of it) widened to the right over
+        // the lamp and a margin, but never past the first status bar icon on that side ([iconsFrom], read from the
+        // status bar's own window): the lamp shrinks before it covers an icon. It is the tap target, the status bar's
+        // full height.
+        val dp = svc.resources.displayMetrics.density
         val d = hole?.height() ?: (18 * u)
         val cx = hole?.centerX() ?: (dm.widthPixels / 2f)
         val cy = hole?.centerY() ?: (bar / 2f)
-        val room = cutout?.boundingRectTop?.takeIf { !it.isEmpty }?.let { r -> minOf(cx - r.left, r.right - cx) } ?: (d / 2 + 4 * u)
-        val side = (2 * minOf(room, d / 2 + 2.5f * u)).toInt()
-        return Box((cx - side / 2f).toInt(), (cy - side / 2f).toInt().coerceAtLeast(0), side, side, d)
+        val strip = cutout?.boundingRectTop?.takeIf { !it.isEmpty }
+            ?.let { android.graphics.RectF(it) } ?: android.graphics.RectF(cx - d / 2 - 6 * u, 0f, cx + d / 2 + 6 * u, maxOf(bar.toFloat(), cy + d / 2))
+        val lampLeft = cx + d / 2 + 3 * dp
+        val limit = iconsFrom(svc, cx + d / 2, bar)?.let { it - 2 * dp } ?: Float.MAX_VALUE
+        val r = ((minOf(limit, lampLeft + 9 * dp) - lampLeft) / 2f).coerceIn(2 * dp, 4.5f * dp)
+        val right = maxOf(strip.right, minOf(limit, lampLeft + 2 * r + 12 * dp))
+        val lamp = floatArrayOf(lampLeft + r - strip.left, cy - strip.top, r)
+        return Box(strip.left.toInt(), strip.top.toInt(), (right - strip.left).toInt(), strip.height().toInt(), d, lamp)
+    }
+
+    /**
+     * Left edge of the first status bar icon right of [from], read from SystemUI's status bar window, or null when
+     * it can't be read (no window, nothing there). Only small nodes in the bar's height count, not its containers.
+     */
+    private fun iconsFrom(svc: Context, from: Float, bar: Int): Float? {
+        val s = svc as? ControlService ?: return null
+        val dm = svc.resources.displayMetrics
+        var best: Float? = null
+        val r = android.graphics.Rect()
+        try {
+            for (w in s.windowsOn(android.view.Display.DEFAULT_DISPLAY)) {
+                if (w.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM) continue
+                w.getBoundsInScreen(r); if (r.top > 0 || r.height() > bar * 2) continue   // the status bar, not the shade
+                val root = w.root ?: continue
+                val stack = ArrayDeque(listOf(root))
+                var seen = 0
+                while (stack.isNotEmpty() && seen++ < 400) {
+                    val n = stack.removeLast()
+                    n.getBoundsInScreen(r)
+                    if (n.isVisibleToUser && n.childCount == 0 && !r.isEmpty && r.top < bar && r.width() < dm.widthPixels / 4 && r.left >= from)
+                        best = minOf(best ?: Float.MAX_VALUE, r.left.toFloat())
+                    for (i in 0 until n.childCount) n.getChild(i)?.let { stack.add(it) }
+                }
+            }
+        } catch (_: Throwable) { return null }
+        return best
+    }
+
+    private var lastLayout = 0L
+    /** The status bar changed (icons came or went): move or resize the island if its room changed. At most every 2 s. */
+    fun statusBarChanged() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastLayout < 2000) return
+        lastLayout = now
+        main.post {
+            val svc = ControlService.instance ?: return@post
+            val v = view ?: return@post
+            if (v.call) return@post
+            val b = box(svc)
+            val lp = v.layoutParams as? WindowManager.LayoutParams ?: return@post
+            if (lp.x == b.x && lp.width == b.w && v.lamp.contentEquals(b.lamp)) return@post
+            lp.x = b.x; lp.y = b.y; lp.width = b.w; lp.height = b.h
+            v.lamp = b.lamp
+            try { (svc.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(v, lp) } catch (_: Throwable) {}
+            v.invalidate()
+        }
     }
 
     /** Just below the island, where its card drops to. */
@@ -132,12 +188,25 @@ object Island {
         val wm = svc.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val b = box(svc, call)
         val w = b.w; val h = b.h
-        val v = PillView(svc, b.hole, call).apply {
+        Log.i(TAG, "island at ${b.x},${b.y} ${b.w}x${b.h} lamp=${b.lamp.toList()}")
+        val v = PillView(svc, b.hole, call, b.lamp).apply {
             contentDescription = if (call) "In a call with Ubiq. Open the call" else "Ubiq"
             // Out of touch mode (a key press) a focused view gets a grey focus square: the island is never focused.
             isFocusable = false
             defaultFocusHighlightEnabled = false
             setOnClickListener { if (this.call) com.agentos.voice.LiveCallActivity.open(svc) else open(svc, target) }
+            // The window sits where a pull-down of the shade could start: a drag down opens the shade instead of a tap.
+            var downY = 0f
+            setOnTouchListener { _, e ->
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { downY = e.rawY; false }
+                    android.view.MotionEvent.ACTION_MOVE -> if (e.rawY - downY > 16 * resources.displayMetrics.density) {
+                        svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
+                        downY = Float.MAX_VALUE / 2; isPressed = false; cancelPendingInputEvents(); true
+                    } else false
+                    else -> false
+                }
+            }
         }
         val lp = WindowManager.LayoutParams(w, h, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -160,12 +229,12 @@ object Island {
     }
 
     /** The pill and its light. The light sits to the right of the camera. */
-    private class PillView(ctx: Context, private val hole: Float, val call: Boolean) : View(ctx) {
+    private class PillView(ctx: Context, private val hole: Float, val call: Boolean, var lamp: FloatArray) : View(ctx) {
         private val d = ctx.resources.displayMetrics.density
         private val pill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
         private val led = Paint(Paint.ANTI_ALIAS_FLAG)
         private val halo = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.argb(110, 0x60, 0x60, 0x60) }
         private var breath = 1f
         private val anim = ValueAnimator.ofFloat(0.35f, 1f).apply {
             duration = 900; repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE
@@ -202,21 +271,23 @@ object Island {
                 c.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), r, r, pill)
                 drawCall(c, r); return
             }
-            // A thin ring of light around the camera, a hairline gap off its edge. No light, nothing drawn: the
-            // camera alone is the island and stays tappable.
+            // A small lamp right of the camera. Off (idle): a dim grey lamp, so home still shows where to tap.
+            // A mid-grey rim keeps a white lamp visible on a light status bar and a dark one.
+            val (x, y, r) = Triple(lamp[0], lamp[1], lamp[2])
+            rim.strokeWidth = maxOf(1f, 0.5f * d)
             val color = when (light) {
-                Light.NONE, Light.CALL -> return
+                Light.NONE, Light.CALL -> {
+                    led.shader = null; led.color = Color.argb(70, 0x80, 0x80, 0x80)
+                    c.drawCircle(x, y, r, led); c.drawCircle(x, y, r, rim); return
+                }
                 Light.WORKING -> Color.WHITE
                 Light.NEEDS_YOU -> Color.rgb(0xFF, 0xCD, 0x03)
                 Light.DONE -> Color.rgb(0x16, 0xD8, 0x73)
             }
-            val cx = width / 2f; val cy = height / 2f
-            val outer = width / 2f
-            val stroke = minOf(1.6f * d, (outer - hole / 2f) * 0.6f).coerceAtLeast(1f)
-            ring.color = color
-            ring.strokeWidth = stroke
-            ring.alpha = (breath * 255).toInt()
-            c.drawCircle(cx, cy, outer - stroke / 2f, ring)
+            led.shader = RadialGradient(x - r * 0.3f, y - r * 0.35f, r * 1.3f, blend(color, Color.WHITE, 0.5f), color, Shader.TileMode.CLAMP)
+            led.alpha = (breath * 255).toInt()
+            c.drawCircle(x, y, r, led)
+            c.drawCircle(x, y, r, rim)
         }
 
         /** Left of the camera a green light, right of it four voice bars. */

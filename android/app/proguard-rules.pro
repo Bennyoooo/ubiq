@@ -8,3 +8,6 @@
 -keep class com.agentos.workspace.IWorkspaceShell { *; }
 -keep class com.agentos.workspace.IWorkspaceShell$* { *; }
 -keep class rikka.shizuku.** { *; }
+
+# Wake word (voice/WakeWord): sherpa-onnx's JNI library reads its config and result classes by field name.
+-keep class com.k2fsa.sherpa.onnx.** { *; }

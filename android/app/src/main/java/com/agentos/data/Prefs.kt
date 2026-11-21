@@ -27,6 +27,9 @@ object Prefs {
     /** Offer the main model the cheap `navigate` tool (agent/Navigator). */
     fun navigator(ctx: Context): Boolean = sp(ctx).getBoolean("navigator", true)
     fun setNavigator(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("navigator", v).apply()
+    /** The express lane (agent/Express): weather, directions and play handled without the main model. */
+    fun expressLane(ctx: Context): Boolean = sp(ctx).getBoolean("express", true)
+    fun setExpressLane(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("express", v).apply()
 
     fun speakReplies(ctx: Context): Boolean = sp(ctx).getBoolean("speak", true)
     fun setSpeakReplies(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("speak", v).apply()
@@ -49,6 +52,13 @@ object Prefs {
     fun setOwnerName(ctx: Context, v: String) = sp(ctx).edit().putString("owner_name", v.trim()).apply()
     /** Seconds the owner has to decide before Ubiq offers the caller to take a message. */
     fun screenWaitSeconds(ctx: Context): Int = sp(ctx).getInt("screen_wait", 30)
+    /** "Hey Ubiq" (voice/WakeWord): on/off, also with the screen off, and sensitivity 0 (strict) … 2 (hears more). */
+    fun wakeWord(ctx: Context): Boolean = sp(ctx).getBoolean("wake_word", false)
+    fun setWakeWord(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("wake_word", v).apply()
+    fun wakeScreenOff(ctx: Context): Boolean = sp(ctx).getBoolean("wake_screen_off", true)
+    fun setWakeScreenOff(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("wake_screen_off", v).apply()
+    fun wakeSensitivity(ctx: Context): Int = sp(ctx).getInt("wake_sensitivity", 1)
+    fun setWakeSensitivity(ctx: Context, v: Int) = sp(ctx).edit().putInt("wake_sensitivity", v).apply()
 
     fun useScreenshots(ctx: Context): Boolean = sp(ctx).getBoolean("screenshots", true)
     fun setUseScreenshots(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("screenshots", v).apply()
@@ -58,9 +68,21 @@ object Prefs {
     fun demoPlaybooks(ctx: Context): Boolean = sp(ctx).getBoolean("demo_playbooks", true)
     fun setDemoPlaybooks(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("demo_playbooks", v).apply()
 
-    /** Personal context (docs/MEMORY.md): record screens, notifications and places on the phone for the agent. */
-    fun personalContext(ctx: Context): Boolean = sp(ctx).getBoolean("personal_context", true)
+    /** Personal context (docs/MEMORY.md): record screens, notifications and places on the phone for the agent. Off until the owner turns it on. */
+    fun personalContext(ctx: Context): Boolean = sp(ctx).getBoolean("personal_context", false)
     fun setPersonalContext(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("personal_context", v).apply()
+    /** Which sources personal context records (`screens`, `notifications`, `places`), each on by default once it is on. */
+    fun recordSource(ctx: Context, source: String): Boolean = sp(ctx).getBoolean("record_$source", true)
+    fun setRecordSource(ctx: Context, source: String, v: Boolean) = sp(ctx).edit().putBoolean("record_$source", v).apply()
+    /** Whether `recall` may search the timeline (conversations are always searchable). */
+    fun timelineSearchable(ctx: Context): Boolean = sp(ctx).getBoolean("timeline_searchable", true)
+    fun setTimelineSearchable(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("timeline_searchable", v).apply()
+    /** Days the raw timeline is kept. */
+    fun timelineDays(ctx: Context): Int = sp(ctx).getInt("timeline_days", 90)
+    fun setTimelineDays(ctx: Context, v: Int) = sp(ctx).edit().putInt("timeline_days", v).apply()
+    /** Apps the owner keeps out of the timeline; null until they change the default list. */
+    fun timelineExcluded(ctx: Context): Set<String>? = sp(ctx).getStringSet("timeline_excluded", null)
+    fun setTimelineExcluded(ctx: Context, v: Set<String>) = sp(ctx).edit().putStringSet("timeline_excluded", v).apply()
 
     /** Reply suggestions over the keyboard in messaging, email and social apps (control/Autocomplete). */
     fun autocomplete(ctx: Context): Boolean = sp(ctx).getBoolean("autocomplete", true)

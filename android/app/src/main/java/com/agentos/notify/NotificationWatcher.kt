@@ -41,7 +41,7 @@ class NotificationWatcher : NotificationListenerService() {
             if (title.isEmpty() && text.isEmpty()) return
             val app = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() } catch (_: Throwable) { sbn.packageName }
             val added = NotificationStore.add(sbn.key, sbn.packageName, app, title, text, sbn.postTime, n.contentIntent) ?: return
-            if (sbn.packageName !in com.agentos.memory.Lifelog.EXCLUDED && com.agentos.memory.Lifelog.enabled(this))
+            if (com.agentos.memory.Lifelog.enabled(this, com.agentos.memory.Lifelog.Kind.NOTIFICATION) && !com.agentos.memory.Lifelog.excluded(this, sbn.packageName))
                 com.agentos.memory.Lifelog.clean("$app: $title ${text}".take(1000))?.let { com.agentos.memory.Lifelog.add(com.agentos.memory.Lifelog.Kind.NOTIFICATION, sbn.packageName, it, sbn.postTime) }
             if (fire) { com.agentos.jobs.Jobs.onNotification(this, added) }
         } catch (t: Throwable) { Log.w("AgentOS/Notify", "record failed", t) }

@@ -103,7 +103,8 @@ object Playbooks {
         return list.firstOrNull { (it.after == null || it.after == last) && it.match.containsMatchIn(t) }
     }
 
-    private const val MAX_REQUEST = 200
+    // 260: a call's voice passes a request on in a longer sentence than the user said it.
+    private const val MAX_REQUEST = 260
 
     fun byName(name: String): Playbook? = all.firstOrNull { it.name.equals(name, true) }
 

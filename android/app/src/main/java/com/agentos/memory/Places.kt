@@ -38,6 +38,12 @@ object Places {
     @Volatile var now: String? = null
         private set
 
+    /** [now] for the prompt, only while places are recorded and searchable (Settings). */
+    fun shared(): String? = now?.takeIf { ::app.isInitialized && Lifelog.enabled(app, Lifelog.Kind.PLACE) && com.agentos.data.Prefs.timelineSearchable(app) }
+
+    /** Delete all: the place now goes too. */
+    fun forget() { now = null; synchronized(this) { stay = null } }
+
     fun allowed(ctx: Context) = ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
         ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
@@ -50,7 +56,7 @@ object Places {
         } catch (t: Throwable) { Log.w(TAG, "passive", t) }
         scope.launch {
             while (true) {
-                if (Lifelog.enabled(app) && allowed(app)) try { fix(lm)?.let { on(it) } } catch (t: Throwable) { Log.w(TAG, "fix", t) }
+                if (Lifelog.enabled(app, Lifelog.Kind.PLACE) && allowed(app)) try { fix(lm)?.let { on(it) } } catch (t: Throwable) { Log.w(TAG, "fix", t) }
                 delay(EVERY_MS)
             }
         }
@@ -78,7 +84,7 @@ object Places {
     }
 
     @Synchronized private fun on(loc: Location) {
-        if (!Lifelog.enabled(app) || loc.accuracy > 500) return
+        if (!Lifelog.enabled(app, Lifelog.Kind.PLACE) || loc.accuracy > 500) return
         val t = maxOf(loc.time, System.currentTimeMillis() - 60_000)
         val s = stay
         if (s != null && s.loc.distanceTo(loc) <= RADIUS_M + loc.accuracy / 2) {

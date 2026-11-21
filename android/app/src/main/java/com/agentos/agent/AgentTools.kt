@@ -72,6 +72,11 @@ class TaskTarget(private val wantWorkspace: Boolean, val session: Session? = nul
     var navSteps = 0
     var navConsults = 0
     var noChange = 0
+    /** The last screen the agent was shown (element ids refer to it), and this turn's screen actions, for [Routes]. */
+    @Volatile var lastSnap: com.agentos.control.ScreenSnapshot? = null
+    val routeLog = ArrayList<Routes.Step>()
+    /** A saved route is being replayed: its steps are not recorded again. */
+    @Volatile var replaying = false
 
     fun takeNote(): String? = pendingNote?.also { pendingNote = null } ?: takeFallbackNote()?.let { "(Note: the background workspace could not be used - $it - so this task runs on the visible screen.)" }
 
@@ -200,7 +205,7 @@ object AgentTools {
     /** Everything the cloud model gets: phone control, notifications, and the connectors that are set up. */
     fun definitions(ctx: Context): List<JSONObject> =
         allDefinitions.filter { Prefs.navigator(ctx) || it.optString("name") != "navigate" } + com.agentos.connect.Connectors.definitions(ctx) +
-            com.agentos.jobs.JobTools.definitions() + com.agentos.memory.Recall.definitions() + MiniAppPlugin.installed?.definitions().orEmpty()
+            com.agentos.jobs.JobTools.definitions() + com.agentos.memory.Recall.definitions() + QuickActions.definitions() + Routes.definitions() + MiniAppPlugin.installed?.definitions().orEmpty()
 
     private val allDefinitions: List<JSONObject> = listOf(
         tool("get_screen", "Return the current screen as a numbered list of UI elements.", """{"properties":{},"required":[]}"""),
@@ -298,8 +303,15 @@ object AgentTools {
     internal val ON_DEVICE_FIELD get() = if (OnDeviceModel.installed != null) ""","on_device":{"type":"boolean","description":"summarize on the phone"}""" else ""
 
     /** Runs one tool call. Effectful calls go through the turn's effect ledger ([Effects.track]). */
-    suspend fun execute(ctx: Context, name: String, input: JSONObject, apps: InstalledApps, target: TaskTarget): ToolOutcome =
-        Effects.track(ctx, name, input, target) { run(ctx, name, input, apps, target) }
+    suspend fun execute(ctx: Context, name: String, input: JSONObject, apps: InstalledApps, target: TaskTarget): ToolOutcome {
+        val before = target.lastSnap
+        val sig = Routes.signature(before)
+        val t0 = android.os.SystemClock.uptimeMillis()
+        val out = Effects.track(ctx, name, input, target) { run(ctx, name, input, apps, target) }
+        Trace.time(target.session?.id, "tool $name", android.os.SystemClock.uptimeMillis() - t0)
+        try { Routes.record(ctx, name, input, target, before, sig, out) } catch (t: Throwable) { android.util.Log.w("AgentOS/Routes", "record", t) }
+        return out
+    }
 
     private suspend fun run(ctx: Context, name: String, input: JSONObject, apps: InstalledApps, target: TaskTarget): ToolOutcome {
         MiniAppPlugin.installed?.execute(ctx, name, input, target)?.let { return it }
@@ -307,6 +319,7 @@ object AgentTools {
         com.agentos.connect.Connectors.execute(ctx, name, input, target)?.let { return it }
         com.agentos.jobs.JobTools.execute(ctx, name, input, target)?.let { return it }
         com.agentos.memory.Recall.execute(name, input, target)?.let { return it }
+        QuickActions.execute(ctx, name, input, apps, target)?.let { return it }
         // Tools that don't need the control service.
         when (name) {
             "done" -> {
@@ -315,6 +328,7 @@ object AgentTools {
                 throw TaskDone(summary)
             }
             "navigate" -> return Navigator.run(ctx, input, apps, target)
+            "replay_route" -> return Routes.replay(ctx, input, apps, target)
             "set_alarm", "set_timer" -> return clockTool(ctx, name, input)
             "phone_modes" -> return com.agentos.notify.Modes.run(ctx, input)
             "ask_user" -> {
@@ -373,6 +387,7 @@ object AgentTools {
         fun look(): com.agentos.control.ScreenSnapshot {
             val snap = svc.snapshot(target.displayId, target.maxNodes)
             target.lastPackage = snap.packageName
+            target.lastSnap = snap
             return snap
         }
         fun note(): String = target.takeNote()?.let { it + "\n" } ?: ""
