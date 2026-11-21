@@ -39,7 +39,10 @@ class AttachPickerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        captureUri = savedInstanceState?.getParcelable(STATE_CAPTURE, Uri::class.java)
+        captureUri = savedInstanceState?.let {
+            if (android.os.Build.VERSION.SDK_INT >= 33) it.getParcelable(STATE_CAPTURE, Uri::class.java)
+            else @Suppress("DEPRECATION") it.getParcelable(STATE_CAPTURE)
+        }
         if (savedInstanceState != null) return // recreated while the picker was up: its result still arrives
         try {
             when (intent.getStringExtra(EXTRA_KIND)) {

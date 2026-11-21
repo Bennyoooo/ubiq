@@ -63,6 +63,7 @@ object Places {
     }
 
     /** A balanced fix; when there is none (no Wi-Fi or cell location), a recent last-known one, else one GPS fix. */
+    @android.annotation.SuppressLint("MissingPermission") // only called after allowed(), inside a try that catches a revoked permission
     private suspend fun fix(lm: LocationManager): Location? {
         val enabled = lm.getProviders(true)
         val provider = listOf(LocationManager.FUSED_PROVIDER, LocationManager.NETWORK_PROVIDER).firstOrNull { it in enabled }
@@ -72,6 +73,7 @@ object Places {
         return if (LocationManager.GPS_PROVIDER in enabled) current(lm, LocationManager.GPS_PROVIDER, LocationRequest.QUALITY_HIGH_ACCURACY) else null
     }
 
+    @android.annotation.SuppressLint("MissingPermission") // see fix()
     private suspend fun current(lm: LocationManager, provider: String, quality: Int): Location? {
         val req = LocationRequest.Builder(0).setQuality(quality).setDurationMillis(30_000).build()
         return withTimeoutOrNull(30_000) {
