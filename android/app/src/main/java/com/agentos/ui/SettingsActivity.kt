@@ -278,7 +278,7 @@ private fun SettingsScreen() {
 
         com.agentos.agent.OnDeviceModel.installed?.let { m -> Section("On-device model") { m.Settings() } }
         Spacer(Modifier.height(16.dp))
-        Text("Ubiq 0.1 • requests go directly from this phone to api.openai.com" + (if (com.agentos.agent.OnDeviceModel.installed != null) "; on-device requests never leave it" else ""),
+        Text("Ubiq ${com.agentos.BuildConfig.VERSION_NAME} • requests go directly from this phone to api.openai.com" + (if (com.agentos.agent.OnDeviceModel.installed != null) "; on-device requests never leave it" else ""),
             Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

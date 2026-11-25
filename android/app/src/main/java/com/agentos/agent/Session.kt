@@ -74,6 +74,17 @@ class Session(val id: String, title: String, val created: Long) {
     internal fun takeAnswerFiles(): List<Attachment> = answerFiles.also { answerFiles = emptyList() }
     /** The answer keys of the question this session is waiting on, if it asked with keys. */
     @Volatile private var pendingOptions: List<String> = emptyList()
+    /** Guards who takes [pendingAnswer]: the user's answer, or the hold running out ([askFromHarness]). Never both. */
+    private val askLock = Any()
+    /**
+     * A question the agent stopped holding its turn for (docs: "the question is durable, the hold is not"). The question
+     * stays open in the chat with no timer; what ended is the hold on the live state (desk, app, slot). The next thing
+     * the user says here starts a new turn that is told what was asked, when, and that its screen was released.
+     */
+    private class Parked(val question: String, val askedAt: Long, val where: String?, val hadScreen: Boolean, val guarded: Boolean)
+    @Volatile private var parked: Parked? = null
+    /** The running harness turn parked its question: it says and does nothing more. */
+    @Volatile private var parkedThisTurn = false
     /** Messages the user (or a rule) sent while a task was running; the agent reads them at its next step. */
     private val lateInputs = java.util.concurrent.ConcurrentLinkedQueue<String>()
     /** Messages with photos or files sent while a turn ran: they start the next turn. */
@@ -189,11 +200,10 @@ class Session(val id: String, title: String, val created: Long) {
         // A key of a background task's question, tapped here in its parent chat: it answers that task directly,
         // the same words every time, instead of the model passing it on.
         if (attachments.isEmpty() && pendingAnswer == null) {
-            AgentRuntime.sessions.value.firstOrNull { c -> c.parentId == id && c.pendingAnswer != null && c.pendingOptions.any { it.equals(t, true) } }
+            AgentRuntime.sessions.value.firstOrNull { c -> c.parentId == id && (c.pendingAnswer != null || c.parked != null) && c.pendingOptions.any { it.equals(t, true) } }
                 ?.let { child -> child.send(t); return }
         }
-        pendingAnswer?.let { d ->
-            pendingAnswer = null
+        synchronized(askLock) { pendingAnswer.also { pendingAnswer = null } }?.let { d ->
             // "Yes" to "Should I remember 1-800-555-0199?" makes the question's words the user's own (memory provenance).
             (_status.value as? AgentStatus.WaitingForUser)?.question?.takeIf { YES.containsMatchIn(t) }?.let { q -> synchronized(owner) { owner.append(q).append('\n') } }
             setStatus(AgentStatus.Running(0, WORKING))
@@ -213,7 +223,9 @@ class Session(val id: String, title: String, val created: Long) {
             turnFromAssist = fromAssist; assistHidden = false; turnGuarded = false; turnByVoice = byVoice
             setStatus(AgentStatus.Running(0, WORKING))
             // Only the owner's own plain words can take the express lane (not a demo, a reply to a quote, nor a request about the screen).
-            val plain = demo == null && modelText == null && attachments.isEmpty() && !onScreen
+            // An answer to a parked question is never an express request, and a "yes" makes the question's words the user's own.
+            parked?.question?.takeIf { YES.containsMatchIn(t) }?.let { q -> synchronized(owner) { owner.append(q).append('\n') } }
+            val plain = demo == null && modelText == null && attachments.isEmpty() && !onScreen && parked == null
             job = scope.launch { if (!(plain && tryExpress(t))) runTurn(forModel, attachments, onScreen, demo = demo) }
         }
     }
@@ -404,8 +416,7 @@ class Session(val id: String, title: String, val created: Long) {
     internal fun passFromConversation(words: String, parent: Session) {
         post(Role.SYSTEM, "From \"${parent.title.value.take(40)}\": $words")
         synchronized(owner) { owner.append(words).append('\n') }
-        pendingAnswer?.let { d ->
-            pendingAnswer = null
+        synchronized(askLock) { pendingAnswer.also { pendingAnswer = null } }?.let { d ->
             setStatus(AgentStatus.Running(0, WORKING))
             parent.clearNotice(41)
             d.complete(OpenAi.userMessage(words, emptyList()))
@@ -502,8 +513,8 @@ class Session(val id: String, title: String, val created: Long) {
         if (demoRunning && by == CANCEL_CHAT && android.os.SystemClock.uptimeMillis() - turnStartedAt < DEMO_STOP_GUARD_MS) { Log.i(TAG, "$id: ignored, just after sending"); return }
         if (harnessRequest != null) scope.launch { Harness.cancel(ctx, id) }
         setUserControl(false)
-        pendingAnswer?.cancel()
-        pendingAnswer = null
+        synchronized(askLock) { pendingAnswer.also { pendingAnswer = null } }?.cancel()
+        parked = null; pendingOptions = emptyList()
         job?.cancel()
         job = null
         lateInputs.clear(); queuedFiles.clear()
@@ -635,7 +646,14 @@ class Session(val id: String, title: String, val created: Long) {
         if (reports.isNotEmpty()) heard(reports)
         val express = generateSequence { expressNotes.poll() }.joinToString("\n").let { if (it.isEmpty()) "" else it + "\n" }
         val routes = Routes.forPrompt(ctx, requestText).let { if (it.isEmpty()) "" else "(Saved routes that may fit; replay_route reaches the page in one call:\n$it)\n" }
-        val userText = reports + express + elsewhere() + liveTasks() + DeviceConditions.note(ctx) + routes + requestText
+        // The user's words after a parked question: the model hears what it asked, how long ago, and that its screen is gone.
+        val resumed = if (asked.isNotBlank() && demo == null) parked?.also { parked = null; pendingOptions = emptyList() } else null
+        if (resumed != null) {
+            clearNotice(41); parentId?.let { AgentRuntime.session(it) }?.clearNotice(41)
+            if (resumed.guarded) turnGuarded = true
+            Trace.log(id, "resume", "parked question answered after ${(System.currentTimeMillis() - resumed.askedAt) / 1000} s")
+        }
+        val userText = reports + express + elsewhere() + liveTasks() + DeviceConditions.note(ctx) + routes + (resumed?.let { resumeNote(it) } ?: "") + requestText
         val svc = ControlService.instance
         openedMiniApp = false
         applyForget()
@@ -647,7 +665,9 @@ class Session(val id: String, title: String, val created: Long) {
         val maxSteps = Prefs.maxSteps(ctx)
         // A demo always plays on the agent's own screen, so Watch works and the user's screen stays theirs.
         val background = Prefs.backgroundMode(ctx) && com.agentos.workspace.Workspace.isReady && (!onScreen || demo != null)
-        val target = TaskTarget(background, this).also { it.guarded = guarded; it.request = asked }
+        // A job's question answered after its hold ended: the new turn is as guarded as the one that asked, with no approval
+        // carried over (the screen that approval was about is gone), so it asks again before anything sensitive.
+        val target = TaskTarget(background, this).also { it.guarded = guarded || resumed?.guarded == true; it.request = asked }
         runsOnScreen = !background
         this.target = target
         if (demo != null) return runDemo(demo, target)
@@ -879,7 +899,7 @@ class Session(val id: String, title: String, val created: Long) {
      */
     private suspend fun runHarnessTurn(userText: String, requestText: String, attachments: List<Attachment>, target: TaskTarget, background: Boolean) {
         val request = StringBuilder(requestText)
-        harnessRequest = request; harnessUsedPhone = false
+        harnessRequest = request; harnessUsedPhone = false; parkedThisTurn = false
         // Picking memories (a small model call) runs while the harness starts, not before it.
         val space = scope.async {
             val t = android.os.SystemClock.uptimeMillis()
@@ -918,13 +938,16 @@ class Session(val id: String, title: String, val created: Long) {
                         val type = ev.optString("type")
                         if (firstEvent && (type == "text" || type == "tool")) { firstEvent = false; Trace.time(id, "first $type", android.os.SystemClock.uptimeMillis() - tModel) }
                         when (type) {
-                            "text" -> ev.optString("text").takeIf { it.isNotBlank() }?.let { post(Role.ASSISTANT, it) }
+                            // After a park the question is the last word: the model's "I'll wait" is not shown.
+                            "text" -> ev.optString("text").takeIf { it.isNotBlank() && !parkedThisTurn }?.let { post(Role.ASSISTANT, it) }
                             "tool" -> harnessToolEvents.incrementAndGet()
                         }
                     }
                     Trace.time(id, "harness turn", android.os.SystemClock.uptimeMillis() - tModel)
                     if (first && fresh) forgetPi = false
                     first = false
+                    // The question's hold ended: the turn ends here with the question still open (see [askFromHarness]).
+                    if (parkedThisTurn) { finish(null, false, speak = null); return@use }
                     if (r.error != null) { finish("The Pi harness stopped: ${r.error.take(300)}", harnessUsedPhone); return@use }
                     // The same deterministic check as the built-in loop: claims vs. this turn's receipts, one correction.
                     val issue = if (!corrected) CompletionCheck.check(r.text, request.toString(), target.effects) else null
@@ -955,6 +978,11 @@ class Session(val id: String, title: String, val created: Long) {
             space.cancel()
             ToolHost.unbind(id)
             harnessRequest = null
+            // A question belongs to its turn. If the harness gave up on ask_user (its tool call timed out) and ended
+            // the turn, the question must not stay open: the next message would go to it as an answer nobody reads,
+            // and the chat would say "Working" with no turn running.
+            synchronized(askLock) { pendingAnswer.also { pendingAnswer = null } }?.cancel()
+            if (parked == null) pendingOptions = emptyList()
         }
     }
 
@@ -962,6 +990,7 @@ class Session(val id: String, title: String, val created: Long) {
     internal suspend fun beforeHarnessTool(name: String, args: JSONObject): String? {
         Trace.log(id, "call", "$name $args")
         awaitAgentTurn(turnSteps)
+        if (parkedThisTurn) return "Not run: your question is still waiting for the user. End your turn now; their answer will come as a new message."
         if (name == "open_mini_app") openedMiniApp = true
         turnSteps++; turnTools++
         if (turnTools > Prefs.maxSteps(ctx) * 2) return "Step budget reached (${Prefs.maxSteps(ctx) * 2} tool calls). Stop now and tell the user where you got to."
@@ -992,21 +1021,84 @@ class Session(val id: String, title: String, val created: Long) {
     }
 
     /** `ask_user` from the harness: the same question flow as the built-in loop; returns the user's answer. */
-    internal suspend fun askFromHarness(question: String, options: List<String> = emptyList()): String {
+    /** What ask_user comes back with: the user's [text], or, when not [answered], the note that the question was parked. */
+    internal class Asked(val text: String, val answered: Boolean)
+
+    internal suspend fun askFromHarness(question: String, options: List<String> = emptyList(), scripted: Boolean = false): Asked {
         post(Role.ASSISTANT, question, options)
         Speaker.maybeSpeak(ctx, question)
         AgentRuntime.refreshOverlay()
         if (turnFromAssist && assistHidden) { assistHidden = false; withContext(Dispatchers.Main) { com.agentos.assist.AgentVoiceService.reshow() } }
         else if (!turnFromAssist) announceQuestion(question, options)
+        val t = target
+        // Something live to keep: a desk with an app on it, or the visible screen this turn has been working on.
+        val live = t != null && (t.workspace || harnessUsedPhone)
+        val before = deskScreen(t)
+        val askedAt = System.currentTimeMillis()
         val deferred = CompletableDeferred<JSONObject>()
         answerFiles = emptyList()
-        pendingAnswer = deferred
+        synchronized(askLock) { pendingAnswer = deferred }
         pendingOptions = options
         setStatus(AgentStatus.WaitingForUser(question))
-        val answer = try { deferred.await().optJSONArray("content")?.optJSONObject(0)?.optString("text") ?: "" } finally { pendingOptions = emptyList() }
+        // The hold: the turn stays open for the answer, with its screen, for a while. A turn with no screen holds too:
+        // an answer inside the hold is what approves a job's next sensitive step (a connector send has no screen), and
+        // ending at once would make such a task ask, park and ask again without end.
+        // A scripted take waits as long as it takes: it has no model to tell about a park.
+        var reply = if (scripted) deferred.await() else kotlinx.coroutines.withTimeoutOrNull(HOLD_MS) { deferred.await() }
+        if (reply == null) {
+            val park = synchronized(askLock) {
+                if (pendingAnswer !== deferred) false   // the answer (or a Stop) took it in the same instant
+                else {
+                    pendingAnswer = null
+                    parked = Parked(question, askedAt, before?.second ?: t?.lastPackage?.let { appLabel(it) }, live, t?.guarded == true)
+                    true
+                }
+            }
+            if (park) {
+                parkedThisTurn = true
+                Trace.log(id, "park", "no answer in ${HOLD_MS / 1000} s" + if (live) "; releasing the screen" else "")
+                return Asked("No answer yet. The question stays open in the chat, and the user's answer will arrive as a new message" +
+                    (if (live) "; your screen is released until then" else "") + ". End your turn now: say nothing more and call no more tools.", false)
+            }
+            reply = deferred.await()
+        }
+        pendingOptions = emptyList()
+        val answer = reply.optJSONArray("content")?.optJSONObject(0)?.optString("text") ?: ""
         harnessRequest?.append('\n')?.append(answer)
-        target?.let { it.approvals++ }
-        return answer
+        // A quick answer is about the screen the question was asked on. A slow one is checked: a page can time out,
+        // sign out or change while it waits, and an approval is only good for the screen it was given for.
+        val waited = System.currentTimeMillis() - askedAt
+        val changed = waited > TRUST_MS && before != null && deskScreen(t)?.let { it.first != before.first } == true
+        if (!changed) t?.let { it.approvals++ }
+        Trace.log(id, "answer", "after ${waited / 1000} s, screen ${if (before == null) "not checked" else if (changed) "changed" else "unchanged"}")
+        return Asked(when {
+            scripted -> answer
+            changed -> "$answer\n(They took ${ago(waited)} to answer, and your screen changed while you waited. Read it again before acting on the answer: if the page, " +
+                "sign-in, cart or price is not as it was, redo what is needed, and ask again before anything sensitive.)"
+            waited > TRUST_MS -> "$answer\n(They took ${ago(waited)} to answer.)"
+            else -> answer
+        }, true)
+    }
+
+    /** The desk's screen as a signature and the app's name, to tell on resume whether it is still the screen the question was asked on. */
+    private fun deskScreen(t: TaskTarget?): Pair<String, String>? {
+        val d = t?.desk ?: return null
+        val svc = ControlService.instance ?: return null
+        return try { svc.snapshot(d.displayId, 60).let { Routes.signature(it) to appLabel(it.packageName) } } catch (e: Throwable) { Log.w(TAG, "desk screen", e); null }
+    }
+    private fun appLabel(pkg: String) = apps.all().firstOrNull { it.packageName == pkg }?.label ?: pkg
+    private fun ago(ms: Long) = when {
+        ms < 90_000 -> "${ms / 1000} seconds"
+        ms < 90 * 60_000 -> "${ms / 60_000} minutes"
+        ms < 36 * 3_600_000L -> "${ms / 3_600_000} hours"
+        else -> "${ms / 86_400_000} days"
+    }
+    private fun resumeNote(p: Parked): String {
+        val since = ago(System.currentTimeMillis() - p.askedAt)
+        return "(You asked the user $since ago: \"${p.question.take(400)}\" Their next message follows; it is usually the answer, but it may be about something else. " +
+            (if (p.hadScreen) "You stopped waiting and released your screen" + (p.where?.let { " (you were in $it)" } ?: "") + ", so nothing you had open is sure to be there: " +
+                "look at where you are before acting, redo what is needed if the page, sign-in, cart or price is not as it was, and ask again before anything sensitive.)\n"
+            else ")\n")
     }
 
     /** This turn opened a mini app on the user's screen: it is only wrapping up now, so the Stop chip stays off the app. */
@@ -1094,7 +1186,7 @@ class Session(val id: String, title: String, val created: Long) {
                         is Playbooks.Step.Wait -> kotlinx.coroutines.delay((s.seconds * 1000).toLong())
                         is Playbooks.Step.Ask -> {
                             val before = _status.value
-                            answer = askFromHarness(s.question, s.options)
+                            answer = askFromHarness(s.question, s.options, scripted = true).text
                             if (s.options.isNotEmpty()) choice = s.options.firstOrNull { it.equals(answer.trim(), true) } ?: answer
                             setStatus(before)
                             if (s.stopIfNo && Playbooks.NO.containsMatchIn(answer)) break@steps
@@ -1260,8 +1352,11 @@ class Session(val id: String, title: String, val created: Long) {
         relayTaskId = null
         if (summary != null) post(Role.ASSISTANT, summary, attachments = listOfNotNull(shot))
         else if (shot != null) post(Role.ASSISTANT, "", attachments = listOf(shot))
-        setStatus(AgentStatus.Idle)
-        parentId?.let { AgentRuntime.session(it) }?.taskFinished(this, summary ?: speak ?: "")
+        // A background task that parked its question still needs the user: its card and the island keep saying so. A
+        // conversation's parked question is simply its last message.
+        val waitingOn = parked?.takeIf { parentId != null }
+        setStatus(if (waitingOn != null) AgentStatus.WaitingForUser(waitingOn.question) else AgentStatus.Idle)
+        if (waitingOn == null) parentId?.let { AgentRuntime.session(it) }?.taskFinished(this, summary ?: speak ?: "")
         AgentRuntime.refreshOverlay()
         if (!speak.isNullOrBlank()) Speaker.maybeSpeak(ctx, speak)
         val fromAssist = turnFromAssist
@@ -1279,7 +1374,9 @@ class Session(val id: String, title: String, val created: Long) {
         // A background task never takes the screen when it ends: its card in the parent chat updates instead.
         // Messages queued after the agent's last step are not dropped: they become the next turn, with any task news.
         synchronized(news) {
-            if (_status.value !is AgentStatus.Idle) return
+            if (_status.value is AgentStatus.Running) return
+            // A parked task waits for the user's words only; what they sent in the moment it parked is that answer.
+            if (_status.value is AgentStatus.WaitingForUser && lateInputs.isEmpty() && queuedFiles.isEmpty()) return
             val queued = generateSequence { lateInputs.poll() }.toList()
             val files = generateSequence { queuedFiles.poll() }.toList()
             val told = generateSequence { news.poll() }.toList()
@@ -1310,6 +1407,10 @@ class Session(val id: String, title: String, val created: Long) {
         const val CANCEL_DELETED = "chat deleted"
         private const val CANCEL_NEW_DEMO = "new demo"
         private const val DEMO_STOP_GUARD_MS = 1500L
+        /** How long a question keeps its turn's screen. Under 5 minutes: the harness's tool call is cut at about 300 s. */
+        private const val HOLD_MS = 285_000L
+        /** An answer this quick is about the screen as it was; a slower one is checked against it. */
+        private const val TRUST_MS = 30_000L
         private val YES = Regex("^\\W*(yes|yeah|yep|sure|ok|okay|please|do it|go ahead|confirm|correct|right)\\b", RegexOption.IGNORE_CASE)
     }
 }

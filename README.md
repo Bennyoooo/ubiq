@@ -10,7 +10,13 @@ One APK runs everywhere. On a stock phone it uses the visible screen, or Shizuku
 background workspace. On the Ubiq ROM it also binds to Ubiq Core, the privileged system
 service that provides the workspace and enforces the owner's rules from its own process.
 
-## Build and install
+## Install
+
+Download the latest `ubiq-<version>.apk` from the [releases page](https://github.com/Bennyoooo/ubiq/releases/latest)
+on your Android phone (Android 12 or newer, 64-bit ARM) and open it. [docs/INSTALL.md](docs/INSTALL.md)
+walks through the install and the first-run setup.
+
+## Build from source
 
 Needs JDK 17 and the Android SDK (platform 35, build-tools 35).
 

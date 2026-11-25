@@ -144,13 +144,13 @@ object ToolHost {
         val n = b.calls.incrementAndGet()
         kotlinx.coroutines.withTimeoutOrNull(1500) { while (session.harnessToolEvents.get() < n) kotlinx.coroutines.delay(15) }
         session.beforeHarnessTool(name, args)?.let { return toolResult(it, isError = true) }
-        if (name == "ask_user") return answerResult(b, session.askFromHarness(args.optString("question", "Could you clarify?"), askOptions(args)))
+        if (name == "ask_user") return asked(b, session.askFromHarness(args.optString("question", "Could you clarify?"), askOptions(args)))
         val outcome = try {
             AgentTools.execute(app, name, args, AgentRuntime.apps, b.target)
         } catch (d: TaskDone) {
             ToolOutcome(d.summary)
         } catch (q: NeedUser) {
-            return answerResult(b, session.askFromHarness(q.question, q.options))
+            return asked(b, session.askFromHarness(q.question, q.options))
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -168,6 +168,9 @@ object ToolHost {
     }
 
     /** The user's answer, with any photos or files they sent along (a photo of the card the form asks for). */
+    /** ask_user's result: the answer, or the note that the question was parked (which is not the user's words). */
+    private fun asked(b: Binding, a: Session.Asked) = if (a.answered) answerResult(b, a.text) else toolResult(b.session.afterHarnessTool(a.text))
+
     private fun answerResult(b: Binding, answer: String): JSONObject {
         val (note, images) = Attachment.forHarness(b.session.takeAnswerFiles())
         val content = JSONArray().put(JSONObject().put("type", "text").put("text", b.session.afterHarnessTool("The user answered: $answer$note")))
